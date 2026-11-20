@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import roots, optimization, integration, interpolation
@@ -11,10 +12,21 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configuración de CORS para conectar sin restricciones con el frontend (Vite/React)
+# Configuración de CORS para conectar con el frontend en Vercel y desarrollo local
+origins = [
+    "https://frontend-rust-zeta-gqplxaya3n.vercel.app",
+    "https://frontend-dyr31c492-tomas-lobo.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+extra_origins = os.environ.get("CORS_ORIGINS", "")
+if extra_origins:
+    origins.extend([o.strip() for o in extra_origins.split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
