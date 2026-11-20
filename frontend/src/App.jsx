@@ -1057,6 +1057,9 @@ export default function App() {
         
         {/* Header */}
         <div className="header-section">
+          <div className="authors-badge">
+            <span>Laura Sofia Artunduaga Pulido - Tomás Felipe Lobo Berbesi</span>
+          </div>
           <h1 className="main-title">Vista tabulada con métodos numéricos</h1>
           <p className="main-subtitle">
             Selecciona la familia y método numérico para desplegar sus parámetros requeridos
@@ -1937,6 +1940,12 @@ export default function App() {
             )}
           </div>
         )}
+
+        {/* Footer */}
+        <footer className="footer-section">
+          <p>Proyecto de Métodos Numéricos</p>
+          <p className="footer-authors">Laura Sofia Artunduaga Pulido - Tomás Felipe Lobo Berbesi</p>
+        </footer>
 
       </div>
     </div>

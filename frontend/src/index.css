@@ -44,6 +44,44 @@ body {
   margin-bottom: 0.5rem;
 }
 
+.authors-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: rgba(168, 85, 247, 0.15);
+  border: 1px solid rgba(192, 132, 252, 0.35);
+  color: #e9d5ff;
+  padding: 0.4rem 1.25rem;
+  border-radius: 9999px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.85rem;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 20px rgba(168, 85, 247, 0.2);
+}
+
+.footer-section {
+  text-align: center;
+  padding: 2.5rem 1rem 1rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 2rem;
+}
+
+.footer-authors {
+  color: #c084fc;
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
 .main-title {
   font-size: 2.75rem;
   font-weight: 700;
