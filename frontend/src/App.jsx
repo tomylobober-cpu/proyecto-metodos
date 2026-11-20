@@ -12,7 +12,10 @@ import {
   Binary,
   TrendingUp,
   Plus,
-  Trash2
+  Trash2,
+  Upload,
+  FileText,
+  Check
 } from 'lucide-react';
 
 const METHOD_CATEGORIES = [
@@ -33,13 +36,13 @@ const METHOD_CATEGORIES = [
     icon: Sigma,
     methods: [
       { id: 'trapecio', name: 'Trapecio', group: 'integracion' },
-      { id: 'simpson_18', name: 'Simpson 1/3 (1/8)', group: 'integracion' },
+      { id: 'simpson_18', name: 'Simpson 1/3', group: 'integracion' },
       { id: 'simpson_38', name: 'Simpson 3/8', group: 'integracion' },
     ]
   },
   {
     id: 'interpolacion',
-    title: 'Interpolación',
+    title: 'Interpolación y Regresión',
     icon: Binary,
     methods: [
       { id: 'interp_directa', name: 'Interpolación directa', group: 'interpolacion' },
@@ -67,8 +70,9 @@ export default function App() {
   const [limitA, setLimitA] = useState(1);
   const [limitB, setLimitB] = useState(2);
   const [tolerance, setTolerance] = useState(0.0001);
+  const [sigFigs, setSigFigs] = useState(4); // Criterio de Scarborough (Cifras significativas)
   const [iterations, setIterations] = useState(20);
-  const [stopCondition, setStopCondition] = useState('tolerance');
+  const [stopCondition, setStopCondition] = useState('sig_figs'); // 'sig_figs' | 'iterations' | 'tolerance'
 
   // Integration inputs
   const [integInputType, setIntegInputType] = useState('function'); // 'function' | 'table'
@@ -93,19 +97,32 @@ export default function App() {
 
   // Interpolation & Regression inputs
   const [points, setPoints] = useState([
-    { x: 1, y: 3 },
-    { x: 2, y: 6 },
-    { x: 3, y: 19 }
+    { x: 1, y: 2 },
+    { x: 2, y: 4.1 },
+    { x: 3, y: 5.9 },
+    { x: 4, y: 8.2 }
   ]);
   const [xEval, setXEval] = useState(2.5);
-  const [regModel, setRegModel] = useState('lineal');
+  const [regModel, setRegModel] = useState('polinomial'); // 'polinomial' | 'exponencial'
+  const [regDegree, setRegDegree] = useState(1); // 1 = Lineal, 2 = Cuadrático, etc.
+
+  // File Upload State
+  const fileInputRef = useRef(null);
+  const [fileHeaders, setFileHeaders] = useState([]);
+  const [fileRows, setFileRows] = useState([]);
+  const [uploadedFileName, setUploadedFileName] = useState('');
+  const [colX, setColX] = useState(0);
+  const [colY, setColY] = useState(1);
 
   // Results & UI
   const [result, setResult] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
-  const [showTable, setShowTable] = useState(false);
+  const [showTable, setShowTable] = useState(true);
   const canvasRef = useRef(null);
   const errorCanvasRef = useRef(null);
+
+  // Scarborough tolerance: Es = 0.5 * 10^(2 - m) %
+  const scarboroughTol = 0.5 * Math.pow(10, 2 - parseInt(sigFigs || 4, 10));
 
   // Helper safe evaluator
   const evaluateF = (expr, scope) => {
@@ -113,6 +130,85 @@ export default function App() {
       return expr.evaluate(scope);
     } catch {
       return NaN;
+    }
+  };
+
+  // Auto calculate derivative for Newton Raphson when funcStr changes
+  useEffect(() => {
+    if (method === 'newton_raphson' && funcStr) {
+      try {
+        const d = math.derivative(funcStr, 'x');
+        setDerivStr(d.toString());
+      } catch {}
+    }
+  }, [funcStr, method]);
+
+  // File Upload Handler (CSV / TXT / TSV)
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadedFileName(file.name);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const text = evt.target.result;
+        const lines = text.trim().split(/\r?\n/).filter(l => l.trim().length > 0);
+        if (lines.length === 0) throw new Error('El archivo está vacío.');
+
+        const firstLine = lines[0];
+        let delim = ',';
+        if (firstLine.includes(';') && (firstLine.match(/;/g) || []).length >= (firstLine.match(/,/g) || []).length) delim = ';';
+        else if (firstLine.includes('\t')) delim = '\t';
+        else if (!firstLine.includes(',') && firstLine.includes(' ')) delim = /\s+/;
+
+        const rawRows = lines.map(l => l.trim().split(delim).map(c => c.trim().replace(/^["']|["']$/g, '')));
+        const isNumRow = rawRows[0].every(val => !isNaN(parseFloat(val)) && isFinite(val));
+
+        let headers = [];
+        let data = [];
+        if (isNumRow) {
+          headers = rawRows[0].map((_, i) => `Columna ${i + 1}`);
+          data = rawRows;
+        } else {
+          headers = rawRows[0].map((h, i) => h || `Columna ${i + 1}`);
+          data = rawRows.slice(1);
+        }
+
+        setFileHeaders(headers);
+        setFileRows(data);
+        const defaultColX = 0;
+        const defaultColY = headers.length > 1 ? 1 : 0;
+        setColX(defaultColX);
+        setColY(defaultColY);
+        applyColumns(data, defaultColX, defaultColY);
+      } catch (err) {
+        alert('Error al leer el archivo: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Apply chosen columns to the active data points table
+  const applyColumns = (rowsData, cx, cy) => {
+    const rows = rowsData || fileRows;
+    const parsed = [];
+    rows.forEach(r => {
+      const vx = parseFloat(r[cx]);
+      const vy = parseFloat(r[cy]);
+      if (!isNaN(vx) && !isNaN(vy) && isFinite(vx) && isFinite(vy)) {
+        parsed.push({ x: vx, y: vy });
+      }
+    });
+
+    if (parsed.length >= 2) {
+      if (integInputType === 'table' && ['trapecio', 'simpson_18', 'simpson_38'].includes(method)) {
+        setIntegPoints(parsed);
+      } else {
+        setPoints(parsed);
+      }
+    } else {
+      alert('Se requieren al menos 2 pares de datos numéricos válidos en las columnas seleccionadas.');
     }
   };
 
@@ -158,6 +254,58 @@ export default function App() {
     setIntegPoints(updated);
   };
 
+  // Load Rubric Suggested Benchmark Cases (1-click verification)
+  const loadTestCase = (mId) => {
+    setErrorMsg('');
+    if (['biseccion', 'falsa_posicion', 'secante', 'newton_raphson'].includes(mId)) {
+      setFuncStr('x^3 - x - 2');
+      setDerivStr('3*x^2 - 1');
+      setLimitA(1);
+      setLimitB(2);
+      setStopCondition('sig_figs');
+      setSigFigs(4);
+    } else if (['trapecio', 'simpson_18', 'simpson_38'].includes(mId)) {
+      setIntegInputType('function');
+      setFuncStr('sin(x)');
+      setLimitA(0);
+      setLimitB(3.141592653589793);
+      setIntegN(6);
+    } else if (mId === 'regresion_mc') {
+      setPoints([
+        { x: 1, y: 2 },
+        { x: 2, y: 4.1 },
+        { x: 3, y: 5.9 },
+        { x: 4, y: 8.2 }
+      ]);
+      setRegModel('polinomial');
+      setRegDegree(1);
+      setXEval(2.5);
+    } else if (mId === 'interp_directa') {
+      setPoints([
+        { x: 1, y: 1 },
+        { x: 2, y: 8 },
+        { x: 3, y: 27 }
+      ]);
+      setXEval(2.5);
+    } else if (mId === 'seccion_dorada_uni') {
+      setFuncStr('2*sin(x) - x^2/10');
+      setLimitA(0);
+      setLimitB(4);
+      setOptiGoal('max');
+      setStopCondition('sig_figs');
+      setSigFigs(4);
+    } else if (mId === 'seccion_dorada_multi') {
+      setMultiFuncStr('(x - 1)^2 + (y + 2)^2');
+      setMultiX0(0);
+      setMultiY0(0);
+      setMultiLimX([-3, 5]);
+      setMultiLimY([-5, 3]);
+      setOptiGoal('min');
+      setStopCondition('iterations');
+      setIterations(15);
+    }
+  };
+
   // Main Calculation Router
   const runCalculation = () => {
     setErrorMsg('');
@@ -184,74 +332,146 @@ export default function App() {
 
   // 1. Root Finding Methods
   const runRootFinding = () => {
-    const parsedExpr = math.compile(funcStr);
+    let parsedExpr;
+    try {
+      parsedExpr = math.compile(funcStr);
+    } catch {
+      throw new Error('Sintaxis matemática inválida en f(x).');
+    }
+
     let parsedDeriv = null;
     if (method === 'newton_raphson') {
       try {
-        parsedDeriv = math.compile(derivStr);
+        let dStr = derivStr;
+        if (!dStr.trim()) {
+          const d = math.derivative(funcStr, 'x');
+          dStr = d.toString();
+          setDerivStr(dStr);
+        }
+        parsedDeriv = math.compile(dStr);
       } catch {
-        throw new Error('Sintaxis inválida en la derivada f\'(x).');
+        throw new Error("No se pudo calcular la derivada analítica f'(x). Revisa la expresión.");
       }
     }
 
     const a0 = parseFloat(limitA);
     const b0 = parseFloat(limitB);
 
-    if (isNaN(a0)) throw new Error('El valor inicial x₀ debe ser un número válido.');
-    if (method !== 'newton_raphson' && isNaN(b0)) throw new Error('El valor inicial x₁ / Límite B debe ser un número válido.');
+    if (isNaN(a0)) throw new Error('El valor inicial x₀ / límite inferior debe ser un número válido.');
+    if (method !== 'newton_raphson' && isNaN(b0)) throw new Error('El valor inicial x₁ / límite superior debe ser un número válido.');
 
-    // Bisección y Falsa posición require a < b and sign change
+    // Bisección y Falsa Posición: Valida cambio de signo f(a)·f(b) < 0
     if (method === 'biseccion' || method === 'falsa_posicion') {
-      if (a0 >= b0) throw new Error('El límite A debe ser menor que el límite B.');
+      if (a0 >= b0) throw new Error('El límite A debe ser estrictamente menor que el límite B.');
 
       const fa0 = evaluateF(parsedExpr, { x: a0 });
       const fb0 = evaluateF(parsedExpr, { x: b0 });
 
-      if (fa0 * fb0 > 0) {
-        throw new Error(`No se garantiza raíz en [${a0}, ${b0}]: f(A) y f(B) tienen el mismo signo.`);
+      if (isNaN(fa0) || isNaN(fb0)) throw new Error('La función no está definida en los extremos del intervalo.');
+
+      if (fa0 * fb0 >= 0) {
+        throw new Error(
+          `No se cumple el teorema de Bolzano: f(A)·f(B) = (${fa0.toFixed(4)})·(${fb0.toFixed(4)}) = ${(fa0 * fb0).toFixed(4)} ≥ 0. ` +
+          `Debe existir un cambio de signo (f(a)·f(b) < 0) para garantizar al menos una raíz en el intervalo.`
+        );
       }
     }
 
     let a = a0, b = b0, xr = 0, xrPrev = 0, ea = 100;
     const history = [];
+
+    // Stopping criteria: Iterations vs Cifras significativas (Scarborough) vs Tolerancia directa
     const maxIters = stopCondition === 'iterations' ? parseInt(iterations, 10) : 100;
-    const tol = stopCondition === 'tolerance' ? parseFloat(tolerance) : 1e-12;
+    let targetTol = 1e-12;
+    if (stopCondition === 'sig_figs') {
+      targetTol = scarboroughTol; // Scarborough's criterion %
+    } else if (stopCondition === 'tolerance') {
+      targetTol = parseFloat(tolerance);
+    }
 
     for (let iter = 1; iter <= maxIters; iter++) {
       const fa = evaluateF(parsedExpr, { x: a });
       const fb = evaluateF(parsedExpr, { x: b });
 
-      if (method === 'biseccion') xr = (a + b) / 2;
-      else if (method === 'falsa_posicion') xr = b - (fb * (a - b)) / (fa - fb);
-      else if (method === 'secante') {
-        if (Math.abs(fb - fa) < 1e-15) throw new Error('División por cero en el método de la Secante (f(x₁) ≈ f(x₀)).');
+      if (method === 'biseccion') {
+        xr = (a + b) / 2;
+      } else if (method === 'falsa_posicion') {
+        if (Math.abs(fb - fa) < 1e-15) throw new Error('División por cero en Falsa Posición.');
+        xr = b - (fb * (a - b)) / (fa - fb);
+      } else if (method === 'secante') {
+        if (Math.abs(fb - fa) < 1e-15) throw new Error('División por cero en la Secante: f(x_i) ≈ f(x_{i-1}).');
         xr = b - (fb * (b - a)) / (fb - fa);
       } else if (method === 'newton_raphson') {
         const dfx = evaluateF(parsedDeriv, { x: a });
         if (isNaN(dfx) || Math.abs(dfx) < 1e-14) {
-          throw new Error(`Derivada f'(${a.toFixed(4)}) ≈ 0. División por cero en Newton-Raphson.`);
+          throw new Error(`Derivada nula: f'(${a.toFixed(5)}) = 0. División por cero en Newton-Raphson.`);
         }
         xr = a - fa / dfx;
       }
 
       ea = iter > 1 ? Math.abs((xr - xrPrev) / (xr === 0 ? 1 : xr)) * 100 : 100;
       const fxr = evaluateF(parsedExpr, { x: xr });
+      const eaStr = iter === 1 ? '-' : ea.toFixed(6) + '%';
 
-      history.push({
-        iteration: iter,
-        a, b, xr, fa, fb, fxr,
-        error: iter === 1 ? '-' : ea.toFixed(6) + '%'
-      });
+      // Record exact columns demanded by the rubric for each method
+      if (method === 'biseccion') {
+        history.push({
+          iteration: iter,
+          xl: a,
+          xu: b,
+          xr,
+          fxl: fa,
+          fxr,
+          prod: fa * fxr,
+          error: eaStr,
+          errorVal: iter === 1 ? null : ea
+        });
+      } else if (method === 'falsa_posicion') {
+        history.push({
+          iteration: iter,
+          xl: a,
+          xu: b,
+          xr,
+          fxl: fa,
+          fxu: fb,
+          fxr,
+          error: eaStr,
+          errorVal: iter === 1 ? null : ea
+        });
+      } else if (method === 'newton_raphson') {
+        const dfx = evaluateF(parsedDeriv, { x: a });
+        history.push({
+          iteration: iter,
+          xi: a,
+          fxi: fa,
+          dfxi: dfx,
+          xnext: xr,
+          error: eaStr,
+          errorVal: iter === 1 ? null : ea
+        });
+      } else if (method === 'secante') {
+        history.push({
+          iteration: iter,
+          xprev: a,
+          xi: b,
+          fxprev: fa,
+          fxi: fb,
+          xnext: xr,
+          error: eaStr,
+          errorVal: iter === 1 ? null : ea
+        });
+      }
 
-      if (stopCondition === 'tolerance' && iter > 1 && ea < tol) break;
+      if (stopCondition !== 'iterations' && iter > 1 && ea < targetTol) break;
       if (Math.abs(fxr) < 1e-15) break;
 
+      // Interval / next step update
       if (method === 'biseccion' || method === 'falsa_posicion') {
         if (fa * fxr < 0) b = xr;
         else if (fa * fxr > 0) a = xr;
         else break;
       } else if (method === 'secante') {
-        a = b; 
+        a = b;
         b = xr;
       } else if (method === 'newton_raphson') {
         a = xr;
@@ -283,15 +503,15 @@ export default function App() {
       n = parseInt(integN, 10);
 
       if (isNaN(a) || isNaN(b)) throw new Error('Los límites a y b deben ser números válidos.');
-      if (a >= b) throw new Error('El límite inferior a debe ser menor que el límite superior b.');
+      if (a >= b) throw new Error('El límite inferior a debe ser estrictamente menor que el límite superior b.');
       if (n < 1) throw new Error('El número de subintervalos n debe ser al menos 1.');
 
-      // Validation for Simpson rules
+      // Validation for Simpson rules according to rubric
       if (method === 'simpson_18' && n % 2 !== 0) {
-        throw new Error(`Simpson 1/8 (1/3) requiere un número PAR de subintervalos n. Actual: ${n}`);
+        throw new Error(`Simpson 1/3 exige que el número de subintervalos n sea PAR. Valor actual: ${n}`);
       }
       if (method === 'simpson_38' && n % 3 !== 0) {
-        throw new Error(`Simpson 3/8 requiere un número de subintervalos n que sea MÚLTIPLO DE 3. Actual: ${n}`);
+        throw new Error(`Simpson 3/8 exige que el número de subintervalos n sea MÚLTIPLO DE 3. Valor actual: ${n}`);
       }
 
       parsedExpr = math.compile(funcStr);
@@ -299,7 +519,7 @@ export default function App() {
       for (let i = 0; i <= n; i++) {
         const xi = a + i * h;
         const yi = evaluateF(parsedExpr, { x: xi });
-        if (isNaN(yi) || !isFinite(yi)) throw new Error(`Función indefinida en x = ${xi.toFixed(4)}`);
+        if (isNaN(yi) || !isFinite(yi)) throw new Error(`Función indefinida o diverge en x = ${xi.toFixed(4)}`);
         xs.push(xi);
         ys.push(yi);
       }
@@ -314,7 +534,6 @@ export default function App() {
 
       if (n < 1) throw new Error('Se requieren al menos 2 puntos en la tabla de datos.');
 
-      // Check equally spaced points
       const h0 = xs[1] - xs[0];
       for (let i = 1; i < xs.length - 1; i++) {
         const hi = xs[i + 1] - xs[i];
@@ -324,135 +543,120 @@ export default function App() {
       }
 
       if (method === 'simpson_18' && n % 2 !== 0) {
-        throw new Error(`Simpson 1/8 requiere un número PAR de subintervalos (número impar de puntos). Puntos actuales: ${xs.length} (n = ${n})`);
+        throw new Error(`Simpson 1/3 exige un número PAR de subintervalos (número impar de puntos). Puntos: ${xs.length} (n = ${n})`);
       }
       if (method === 'simpson_38' && n % 3 !== 0) {
-        throw new Error(`Simpson 3/8 requiere que n sea múltiplo de 3. Actualmente n = ${n}`);
+        throw new Error(`Simpson 3/8 exige que n sea múltiplo de 3. Actualmente n = ${n}`);
       }
     }
 
-    const h = (b - a) / n;
-    let integral = 0;
-    const history = [];
-
-    if (method === 'trapecio') {
-      let sumInternal = 0;
-      for (let i = 1; i < n; i++) {
-        sumInternal += ys[i];
-      }
-      integral = (h / 2) * (ys[0] + 2 * sumInternal + ys[n]);
-    } else if (method === 'simpson_18') {
-      let sumOdd = 0;
-      let sumEven = 0;
-      for (let i = 1; i < n; i++) {
-        if (i % 2 !== 0) sumOdd += ys[i];
-        else sumEven += ys[i];
-      }
-      integral = (h / 3) * (ys[0] + 4 * sumOdd + 2 * sumEven + ys[n]);
-    } else if (method === 'simpson_38') {
-      let sum3k = 0;
-      let sumOther = 0;
-      for (let i = 1; i < n; i++) {
-        if (i % 3 === 0) sum3k += ys[i];
-        else sumOther += ys[i];
-      }
-      integral = ((3 * h) / 8) * (ys[0] + 3 * sumOther + 2 * sum3k + ys[n]);
-    }
-
-    for (let i = 0; i <= n; i++) {
-      history.push({
-        i,
-        x: xs[i],
-        y: ys[i]
-      });
-    }
-
-    // Richardson extrapolation reference to calculate relative error for numerical integration
-    let relError = null;
-    if (parsedExpr && (method === 'trapecio' || method === 'simpson_18')) {
-      const n2 = n * 2;
-      const h2 = (b - a) / n2;
-      let i2 = 0;
+    const computeIntegral = (evalXs, evalYs, subN) => {
+      const stepH = (evalXs[evalXs.length - 1] - evalXs[0]) / subN;
       if (method === 'trapecio') {
-        let sumInt2 = 0;
-        for (let j = 1; j < n2; j++) {
-          sumInt2 += evaluateF(parsedExpr, { x: a + j * h2 });
-        }
-        i2 = (h2 / 2) * (ys[0] + 2 * sumInt2 + ys[n]);
+        let sumInternal = 0;
+        for (let i = 1; i < subN; i++) sumInternal += evalYs[i];
+        return (stepH / 2) * (evalYs[0] + 2 * sumInternal + evalYs[subN]);
       } else if (method === 'simpson_18') {
-        let sumOdd2 = 0, sumEven2 = 0;
-        for (let j = 1; j < n2; j++) {
-          const val = evaluateF(parsedExpr, { x: a + j * h2 });
-          if (j % 2 !== 0) sumOdd2 += val;
-          else sumEven2 += val;
+        let sumOdd = 0, sumEven = 0;
+        for (let i = 1; i < subN; i++) {
+          if (i % 2 !== 0) sumOdd += evalYs[i];
+          else sumEven += evalYs[i];
         }
-        i2 = (h2 / 3) * (ys[0] + 4 * sumOdd2 + 2 * sumEven2 + ys[n]);
+        return (stepH / 3) * (evalYs[0] + 4 * sumOdd + 2 * sumEven + evalYs[subN]);
+      } else if (method === 'simpson_38') {
+        let sum3k = 0, sumOther = 0;
+        for (let i = 1; i < subN; i++) {
+          if (i % 3 === 0) sum3k += evalYs[i];
+          else sumOther += evalYs[i];
+        }
+        return ((3 * stepH) / 8) * (evalYs[0] + 3 * sumOther + 2 * sum3k + evalYs[subN]);
       }
-      relError = Math.abs((i2 - integral) / (i2 === 0 ? 1 : i2)) * 100;
-    }
+      return 0;
+    };
 
-    // 2. Build error convergence history for all n subintervals (for integration error plot)
-    const errorHistory = [];
+    const finalIntegral = computeIntegral(xs, ys, n);
+    const finalH = (b - a) / n;
+
+    // Iterations table required by the Rubric:
+    // "Iteración, n, h, integral aproximada, error aproximado (%)"
+    // Shows how the approximation improves and error decreases as n increases
+    const history = [];
     if (parsedExpr) {
-      const stepIntervals = [2, 4, 6, 8, 12, 16, 24];
+      let stepSize = method === 'simpson_38' ? 3 : method === 'simpson_18' ? 2 : 1;
+      const subNList = [];
+      for (let k = stepSize; k <= n; k += stepSize) {
+        subNList.push(k);
+      }
+      if (subNList.length === 0 || subNList[subNList.length - 1] !== n) {
+        subNList.push(n);
+      }
+
       let prevInt = null;
-      stepIntervals.forEach((k) => {
-        if (method === 'simpson_18' && k % 2 !== 0) return;
-        if (method === 'simpson_38' && k % 3 !== 0) return;
+      subNList.forEach((k, idx) => {
         const hk = (b - a) / k;
-        let ik = 0;
-        if (method === 'trapecio') {
-          let s = 0;
-          for (let j = 1; j < k; j++) s += evaluateF(parsedExpr, { x: a + j * hk });
-          ik = (hk / 2) * (evaluateF(parsedExpr, { x: a }) + 2 * s + evaluateF(parsedExpr, { x: b }));
-        } else if (method === 'simpson_18') {
-          let sOdd = 0, sEven = 0;
-          for (let j = 1; j < k; j++) {
-            const v = evaluateF(parsedExpr, { x: a + j * hk });
-            if (j % 2 !== 0) sOdd += v; else sEven += v;
-          }
-          ik = (hk / 3) * (evaluateF(parsedExpr, { x: a }) + 4 * sOdd + 2 * sEven + evaluateF(parsedExpr, { x: b }));
-        } else if (method === 'simpson_38') {
-          let s3k = 0, sOther = 0;
-          for (let j = 1; j < k; j++) {
-            const v = evaluateF(parsedExpr, { x: a + j * hk });
-            if (j % 3 === 0) s3k += v; else sOther += v;
-          }
-          ik = ((3 * hk) / 8) * (evaluateF(parsedExpr, { x: a }) + 3 * sOther + 2 * s3k + evaluateF(parsedExpr, { x: b }));
+        const subXs = [], subYs = [];
+        for (let j = 0; j <= k; j++) {
+          const xj = a + j * hk;
+          subXs.push(xj);
+          subYs.push(evaluateF(parsedExpr, { x: xj }));
         }
-        if (prevInt !== null) {
-          const err = Math.abs((ik - prevInt) / (ik === 0 ? 1 : ik)) * 100;
-          errorHistory.push({ iteration: k, errorVal: err, label: `n=${k}` });
-        }
+        const ik = computeIntegral(subXs, subYs, k);
+        const err = prevInt !== null ? Math.abs((ik - prevInt) / (ik === 0 ? 1 : ik)) * 100 : null;
+        history.push({
+          iteration: idx + 1,
+          n: k,
+          h: hk,
+          integral: ik,
+          error: err !== null ? err.toFixed(6) + '%' : '-',
+          errorVal: err
+        });
         prevInt = ik;
       });
+    } else {
+      history.push({
+        iteration: 1,
+        n,
+        h: finalH,
+        integral: finalIntegral,
+        error: '-',
+        errorVal: null
+      });
     }
+
+    const lastErr = history[history.length - 1]?.errorVal || null;
 
     setResult({
       type: 'integration',
-      integral,
-      h,
+      integral: finalIntegral,
+      h: finalH,
       n,
       a,
       b,
-      finalError: relError,
+      finalError: lastErr,
       history,
-      errorHistory: errorHistory.length > 0 ? errorHistory : null,
+      errorHistory: history.filter(h => h.errorVal !== null),
       parsedExpr,
-      points: history.map(item => ({ x: item.x, y: item.y })),
+      points: xs.map((x, idx) => ({ x, y: ys[idx] })),
       aRange: a,
       bRange: b
     });
   };
 
-  // 3. Sección Dorada Univariada (Opti.pdf)
+  // 3. Sección Áurea Univariada
   const runGoldenSectionUni = () => {
-    const parsedExpr = math.compile(funcStr);
+    let parsedExpr;
+    try {
+      parsedExpr = math.compile(funcStr);
+    } catch {
+      throw new Error('Sintaxis matemática inválida en f(x).');
+    }
+
     let xl = parseFloat(limitA);
     let xu = parseFloat(limitB);
     if (isNaN(xl) || isNaN(xu)) throw new Error('Define los límites [a, b].');
-    if (xl >= xu) throw new Error('El límite a debe ser menor que el límite b.');
+    if (xl >= xu) throw new Error('El límite a debe ser estrictamente menor que el límite b.');
 
+    // Razón áurea: R = (sqrt(5) - 1) / 2 ≈ 0.6180339887
     const R = (Math.sqrt(5) - 1) / 2;
     let d = R * (xu - xl);
     let x1 = xl + d;
@@ -461,28 +665,42 @@ export default function App() {
     let f2 = evaluateF(parsedExpr, { x: x2 });
 
     const maxIters = stopCondition === 'iterations' ? parseInt(iterations, 10) : 60;
-    const tol = stopCondition === 'tolerance' ? parseFloat(tolerance) : 1e-6;
+    let targetTol = 1e-6;
+    if (stopCondition === 'sig_figs') {
+      targetTol = scarboroughTol;
+    } else if (stopCondition === 'tolerance') {
+      targetTol = parseFloat(tolerance);
+    }
+
     const history = [];
     let xOpt = optiGoal === 'max' ? (f1 > f2 ? x1 : x2) : (f1 < f2 ? x1 : x2);
     let ea = 100;
 
     for (let iter = 1; iter <= maxIters; iter++) {
-      d = R * d;
       xOpt = optiGoal === 'max' ? (f1 > f2 ? x1 : x2) : (f1 < f2 ? x1 : x2);
       if (iter > 1) {
         ea = Math.abs((1 - R) * (xu - xl) / (xOpt === 0 ? 1 : xOpt)) * 100;
       }
 
+      // Exact columns required by rubric:
+      // i, xl, xu, x1, x2, f(x1), f(x2), error aproximado (%)
       history.push({
         iteration: iter,
-        xl, xu, x1, x2, f1, f2,
+        xl,
+        xu,
+        x1,
+        x2,
+        f1,
+        f2,
         xOpt,
         fOpt: evaluateF(parsedExpr, { x: xOpt }),
-        error: iter === 1 ? '-' : ea.toFixed(5) + '%'
+        error: iter === 1 ? '-' : ea.toFixed(6) + '%',
+        errorVal: iter === 1 ? null : ea
       });
 
-      if (stopCondition === 'tolerance' && iter > 1 && ea < tol) break;
+      if (stopCondition !== 'iterations' && iter > 1 && ea < targetTol) break;
 
+      // Reutiliza un punto interior (sólo evalúa 1 nuevo punto por paso)
       const condition = optiGoal === 'max' ? f1 > f2 : f1 < f2;
       if (condition) {
         xl = x2;
@@ -512,19 +730,33 @@ export default function App() {
     });
   };
 
-  // 4. Sección Dorada Multivariada (Opti.pdf)
+  // 4. Sección Áurea Multivariada
   const runGoldenSectionMulti = () => {
-    const parsedExpr = math.compile(multiFuncStr);
+    let parsedExpr;
+    try {
+      parsedExpr = math.compile(multiFuncStr);
+    } catch {
+      throw new Error('Sintaxis matemática inválida en f(x, y).');
+    }
+
     let currX = parseFloat(multiX0);
     let currY = parseFloat(multiY0);
     const R = (Math.sqrt(5) - 1) / 2;
-    const cycles = stopCondition === 'iterations' ? parseInt(iterations, 10) : 15;
-    const tol = stopCondition === 'tolerance' ? parseFloat(tolerance) : 1e-5;
+    const maxCycles = stopCondition === 'iterations' ? parseInt(iterations, 10) : 15;
+    let targetTol = 1e-5;
+    if (stopCondition === 'sig_figs') {
+      targetTol = scarboroughTol;
+    } else if (stopCondition === 'tolerance') {
+      targetTol = parseFloat(tolerance);
+    }
+
     const history = [];
+    let stepCount = 0;
     let prevVal = evaluateF(parsedExpr, { x: currX, y: currY });
     let ea = 100;
 
-    for (let c = 1; c <= cycles; c++) {
+    for (let c = 1; c <= maxCycles; c++) {
+      // 1) Opt along X holding Y fixed
       let xl = multiLimX[0], xu = multiLimX[1];
       let d = R * (xu - xl);
       let x1 = xl + d, x2 = xu - d;
@@ -542,8 +774,30 @@ export default function App() {
           f2 = evaluateF(parsedExpr, { x: x2, y: currY });
         }
       }
-      currX = optiGoal === 'max' ? (f1 > f2 ? x1 : x2) : (f1 < f2 ? x1 : x2);
+      currX = (optiGoal === 'max' ? f1 > f2 : f1 < f2) ? x1 : x2;
+      stepCount++;
+      let currentValX = evaluateF(parsedExpr, { x: currX, y: currY });
+      let eaX = Math.abs((currentValX - prevVal) / (currentValX === 0 ? 1 : currentValX)) * 100;
+      prevVal = currentValX;
 
+      // Exact columns required by rubric:
+      // i, xl, xu, x1, x2, f(x1), f(x2), error aproximado (%); en multivariada, coordenada activa y punto actual
+      history.push({
+        iteration: stepCount,
+        activeCoord: 'X',
+        currX: currX.toFixed(5),
+        currY: currY.toFixed(5),
+        xl,
+        xu,
+        x1,
+        x2,
+        f1,
+        f2,
+        error: stepCount === 1 ? '-' : eaX.toFixed(5) + '%',
+        errorVal: stepCount === 1 ? null : eaX
+      });
+
+      // 2) Opt along Y holding X fixed
       let yl = multiLimY[0], yu = multiLimY[1];
       d = R * (yu - yl);
       let y1 = yl + d, y2 = yu - d;
@@ -561,21 +815,29 @@ export default function App() {
           f2 = evaluateF(parsedExpr, { x: currX, y: y2 });
         }
       }
-      currY = optiGoal === 'max' ? (f1 > f2 ? x1 : x2) : (f1 < f2 ? x1 : x2);
-
-      const currentVal = evaluateF(parsedExpr, { x: currX, y: currY });
-      ea = Math.abs((currentVal - prevVal) / (currentVal === 0 ? 1 : currentVal)) * 100;
-      prevVal = currentVal;
+      currY = (optiGoal === 'max' ? f1 > f2 : f1 < f2) ? y1 : y2;
+      stepCount++;
+      let currentValY = evaluateF(parsedExpr, { x: currX, y: currY });
+      let eaY = Math.abs((currentValY - prevVal) / (currentValY === 0 ? 1 : currentValY)) * 100;
+      prevVal = currentValY;
+      ea = eaY;
 
       history.push({
-        iteration: c,
-        xOpt: currX,
-        yOpt: currY,
-        fOpt: currentVal,
-        error: c === 1 ? '-' : ea.toFixed(5) + '%'
+        iteration: stepCount,
+        activeCoord: 'Y',
+        currX: currX.toFixed(5),
+        currY: currY.toFixed(5),
+        xl: yl,
+        xu: yu,
+        x1: y1,
+        x2: y2,
+        f1,
+        f2,
+        error: eaY.toFixed(5) + '%',
+        errorVal: eaY
       });
 
-      if (stopCondition === 'tolerance' && c > 1 && ea < tol) break;
+      if (stopCondition !== 'iterations' && eaY < targetTol) break;
     }
 
     setResult({
@@ -597,9 +859,10 @@ export default function App() {
 
     const uniqueXs = new Set(xs);
     if (uniqueXs.size !== xs.length) {
-      throw new Error('Todos los valores xᵢ deben ser distintos entre sí.');
+      throw new Error('Todos los valores xᵢ deben ser distintos entre sí para interpolar.');
     }
 
+    // Vandermonde matrix: V_ij = x_i^j
     const V = [];
     for (let i = 0; i <= n; i++) {
       const row = [];
@@ -626,6 +889,18 @@ export default function App() {
 
     const parsedExpr = math.compile(polyStr.replace(/·/g, '*'));
 
+    // Detail table: points and p(x_i)
+    const history = points.map((p, idx) => {
+      let pVal = 0;
+      for (let j = 0; j <= n; j++) pVal += coeffs[j] * Math.pow(p.x, j);
+      return {
+        i: idx + 1,
+        x: p.x,
+        y: p.y,
+        pVal: pVal.toFixed(4)
+      };
+    });
+
     setResult({
       type: 'interpolation',
       degree: n,
@@ -635,12 +910,13 @@ export default function App() {
       yEstimated,
       parsedExpr,
       points,
+      history,
       aRange: Math.min(...xs) - 1,
       bRange: Math.max(...xs) + 1
     });
   };
 
-  // 6. Regresión por Mínimos Cuadrados
+  // 6. Regresión por Mínimos Cuadrados (Polinomial de grado arbitrario m)
   const runRegressionMC = () => {
     const n = points.length;
     if (n < 2) throw new Error('Se requieren al menos 2 puntos para la regresión.');
@@ -652,61 +928,56 @@ export default function App() {
     let parsedExpr;
     let r2 = 0;
     let evalFunc;
+    let yEstimated = 0;
 
-    if (regModel === 'lineal') {
-      const sumX = math.sum(xs);
-      const sumY = math.sum(ys);
-      const sumXY = xs.reduce((acc, x, i) => acc + x * ys[i], 0);
-      const sumX2 = xs.reduce((acc, x) => acc + x * x, 0);
+    if (regModel === 'polinomial') {
+      const m = parseInt(regDegree, 10) || 1;
+      if (n <= m) {
+        throw new Error(`Para ajustar un polinomio de grado ${m} se requieren al menos ${m + 1} puntos observados.`);
+      }
 
-      const m = (n * sumXY - sumX * sumY) / (n * sumX2 - Math.pow(sumX, 2));
-      const b = (sumY / n) - m * (sumX / n);
+      // Normal equations for polynomial regression: A * a = B
+      // A_jk = sum(x^(j+k)), B_j = sum(x^j * y)
+      const A = [];
+      const B = [];
+      for (let j = 0; j <= m; j++) {
+        const row = [];
+        for (let k = 0; k <= m; k++) {
+          let sumX = 0;
+          for (let i = 0; i < n; i++) sumX += Math.pow(xs[i], j + k);
+          row.push(sumX);
+        }
+        A.push(row);
 
-      modelStr = `y = ${m.toFixed(4)}·x + ${b.toFixed(4)}`.replace('+-', '- ');
-      parsedExpr = math.compile(`${m}*x + ${b}`);
-      evalFunc = (x) => m * x + b;
+        let sumXY = 0;
+        for (let i = 0; i < n; i++) sumXY += Math.pow(xs[i], j) * ys[i];
+        B.push(sumXY);
+      }
 
-      const meanY = sumY / n;
+      const aCoeffs = math.lusolve(A, B).map(v => v[0]); // [a0, a1, ..., am]
+
+      evalFunc = (x) => {
+        let val = 0;
+        for (let k = 0; k <= m; k++) val += aCoeffs[k] * Math.pow(x, k);
+        return val;
+      };
+
+      const polyTerms = aCoeffs.map((c, i) => {
+        const val = c.toFixed(4);
+        if (i === 0) return `${val}`;
+        if (i === 1) return `${val}·x`;
+        return `${val}·x^${i}`;
+      });
+      modelStr = `y = ` + polyTerms.reverse().join(' + ').replace(/\+\s\-/g, '- ');
+      parsedExpr = math.compile(modelStr.replace('y = ', '').replace(/·/g, '*'));
+
+      // Calculate R^2
+      const meanY = math.sum(ys) / n;
       const ssTot = ys.reduce((acc, y) => acc + Math.pow(y - meanY, 2), 0);
       const ssRes = ys.reduce((acc, y, i) => acc + Math.pow(y - evalFunc(xs[i]), 2), 0);
       r2 = ssTot === 0 ? 1 : 1 - (ssRes / ssTot);
-      // Residual errors history for chart
-      var regHistory = points.map((p, idx) => {
-        const yPred = evalFunc(p.x);
-        const err = Math.abs((p.y - yPred) / (p.y === 0 ? 1 : p.y)) * 100;
-        return { iteration: idx + 1, errorVal: err, label: `P${idx + 1}` };
-      });
-    } else if (regModel === 'polinomial_2') {
-      if (n < 3) throw new Error('Se requieren al menos 3 puntos para modelo cuadrático.');
-      const sumX = math.sum(xs);
-      const sumX2 = xs.reduce((acc, x) => acc + x * x, 0);
-      const sumX3 = xs.reduce((acc, x) => acc + Math.pow(x, 3), 0);
-      const sumX4 = xs.reduce((acc, x) => acc + Math.pow(x, 4), 0);
-      const sumY = math.sum(ys);
-      const sumXY = xs.reduce((acc, x, i) => acc + x * ys[i], 0);
-      const sumX2Y = xs.reduce((acc, x, i) => acc + x * x * ys[i], 0);
+      yEstimated = evalFunc(xEval);
 
-      const M = [
-        [n, sumX, sumX2],
-        [sumX, sumX2, sumX3],
-        [sumX2, sumX3, sumX4]
-      ];
-      const B = [sumY, sumXY, sumX2Y];
-      const a = math.lusolve(M, B).map(v => v[0]);
-
-      modelStr = `y = ${a[2].toFixed(4)}·x² + ${a[1].toFixed(4)}·x + ${a[0].toFixed(4)}`.replace(/\+\s\-/g, '- ');
-      parsedExpr = math.compile(`${a[2]}*x^2 + ${a[1]}*x + ${a[0]}`);
-      evalFunc = (x) => a[2] * x * x + a[1] * x + a[0];
-
-      const meanY = sumY / n;
-      const ssTot = ys.reduce((acc, y) => acc + Math.pow(y - meanY, 2), 0);
-      const ssRes = ys.reduce((acc, y, i) => acc + Math.pow(y - evalFunc(xs[i]), 2), 0);
-      r2 = ssTot === 0 ? 1 : 1 - (ssRes / ssTot);
-      var regHistory = points.map((p, idx) => {
-        const yPred = evalFunc(p.x);
-        const err = Math.abs((p.y - yPred) / (p.y === 0 ? 1 : p.y)) * 100;
-        return { iteration: idx + 1, errorVal: err, label: `P${idx + 1}` };
-      });
     } else if (regModel === 'exponencial') {
       if (ys.some(y => y <= 0)) throw new Error('Para modelo exponencial todos los valores y deben ser > 0.');
       const lnY = ys.map(y => Math.log(y));
@@ -727,20 +998,34 @@ export default function App() {
       const ssTot = ys.reduce((acc, y) => acc + Math.pow(y - meanY, 2), 0);
       const ssRes = ys.reduce((acc, y, i) => acc + Math.pow(y - evalFunc(xs[i]), 2), 0);
       r2 = ssTot === 0 ? 1 : 1 - (ssRes / ssTot);
-      var regHistory = points.map((p, idx) => {
-        const yPred = evalFunc(p.x);
-        const err = Math.abs((p.y - yPred) / (p.y === 0 ? 1 : p.y)) * 100;
-        return { iteration: idx + 1, errorVal: err, label: `P${idx + 1}` };
-      });
+      yEstimated = evalFunc(xEval);
     }
+
+    // Points table with residuals and relative error
+    const history = points.map((p, idx) => {
+      const yPred = evalFunc(p.x);
+      const residual = p.y - yPred;
+      const err = Math.abs((p.y - yPred) / (p.y === 0 ? 1 : p.y)) * 100;
+      return {
+        i: idx + 1,
+        x: p.x,
+        y: p.y,
+        yPred: yPred.toFixed(4),
+        residual: residual.toFixed(4),
+        error: err.toFixed(4) + '%',
+        errorVal: err
+      };
+    });
 
     setResult({
       type: 'regression',
       modelStr,
       r2: Math.max(0, r2),
+      xEval,
+      yEstimated,
       parsedExpr,
       points,
-      history: regHistory,
+      history,
       aRange: Math.min(...xs) - 1,
       bRange: Math.max(...xs) + 1
     });
@@ -759,12 +1044,11 @@ export default function App() {
   const handleSelectMethod = (catId, methodId) => {
     setSelectedCategory(catId);
     setMethod(methodId);
-    // Auto-adjust subintervals according to rules
     if (methodId === 'simpson_18' && integN % 2 !== 0) setIntegN(integN + 1);
     if (methodId === 'simpson_38' && integN % 3 !== 0) setIntegN(Math.ceil(integN / 3) * 3 || 6);
   };
 
-  // Draw chart
+  // Draw Function / Curve Chart
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -856,79 +1140,70 @@ export default function App() {
       ctx.stroke();
     }
 
-    // Integration Area Fill & Segment Dividers
-    if (result?.type === 'integration' && result.history) {
-      ctx.fillStyle = 'rgba(217, 70, 239, 0.18)';
-      ctx.beginPath();
-      const firstX = toX(result.history[0].x);
-      const yZero = toY(0);
-      ctx.moveTo(firstX, yZero);
-      result.history.forEach(pt => {
-        ctx.lineTo(toX(pt.x), toY(pt.y));
-      });
-      ctx.lineTo(toX(result.history[result.history.length - 1].x), yZero);
-      ctx.closePath();
-      ctx.fill();
-
-      // Draw vertical segment slices
-      ctx.strokeStyle = 'rgba(217, 70, 239, 0.45)';
-      ctx.lineWidth = 1;
-      result.history.forEach(pt => {
-        ctx.beginPath();
-        ctx.moveTo(toX(pt.x), yZero);
-        ctx.lineTo(toX(pt.x), toY(pt.y));
-        ctx.stroke();
-      });
-    }
-
-    // Curve
+    // Draw Function Curve
     if (pts.length > 1) {
       ctx.beginPath();
-      ctx.strokeStyle = '#38bdf8';
+      ctx.strokeStyle = '#c084fc';
       ctx.lineWidth = 2.5;
-      pts.forEach((pt, idx) => {
-        const cx = toX(pt.x), cy = toY(pt.y);
-        if (idx === 0) ctx.moveTo(cx, cy);
-        else ctx.lineTo(cx, cy);
-      });
+      for (let i = 0; i < pts.length; i++) {
+        const px = toX(pts[i].x);
+        const py = toY(pts[i].y);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
       ctx.stroke();
     }
 
-    // Data points
+    // Plot observed data points (for regression/interpolation)
     if (result?.points) {
-      result.points.forEach((p) => {
-        const px = toX(p.x), py = toY(p.y);
+      for (const p of result.points) {
+        const px = toX(p.x);
+        const py = toY(p.y);
         ctx.beginPath();
-        ctx.arc(px, py, 5.5, 0, 2 * Math.PI);
-        ctx.fillStyle = '#a855f7';
+        ctx.arc(px, py, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = '#38bdf8';
         ctx.fill();
-        ctx.strokeStyle = '#fff';
+        ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1.5;
         ctx.stroke();
-      });
+      }
     }
 
-    // Root or Golden Optimum
-    if (result?.value !== undefined) {
+    // Plot root or optimum point
+    if (result?.type === 'root' && result?.value !== undefined) {
       const rx = toX(result.value);
-      const ry = toY(result.type === 'root' ? 0 : result.fval);
-
-      ctx.beginPath();
-      ctx.arc(rx, ry, 11, 0, 2 * Math.PI);
-      ctx.fillStyle = 'rgba(244, 63, 94, 0.3)';
-      ctx.fill();
-
+      const ry = toY(result.fval || 0);
       ctx.beginPath();
       ctx.arc(rx, ry, 6, 0, 2 * Math.PI);
-      ctx.fillStyle = '#f43f5e';
+      ctx.fillStyle = '#22c55e';
       ctx.fill();
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (result?.type === 'opti_uni' && result?.value !== undefined) {
+      const ox = toX(result.value);
+      const oy = toY(result.fval || 0);
+      ctx.beginPath();
+      ctx.arc(ox, oy, 6, 0, 2 * Math.PI);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if ((result?.type === 'interpolation' || result?.type === 'regression') && result?.xEval !== undefined && result?.yEstimated !== undefined) {
+      const ex = toX(result.xEval);
+      const ey = toY(result.yEstimated);
+      ctx.beginPath();
+      ctx.arc(ex, ey, 6, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ec4899';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
       ctx.stroke();
     }
   }, [result, funcStr, method]);
 
-  // Draw Error Convergence Chart
+  // Draw Error Convergence Chart (Rubric 1 requirement: coherente con la tabla de iteraciones)
   useEffect(() => {
     const canvas = errorCanvasRef.current;
     if (!canvas) return;
@@ -938,10 +1213,11 @@ export default function App() {
 
     ctx.clearRect(0, 0, width, height);
 
-    // Extract error values
     let errorPoints = [];
-    if (result?.errorHistory) {
-      errorPoints = result.errorHistory.map(item => ({ x: item.iteration, y: item.errorVal, label: item.label }));
+    if (result?.errorHistory && result.errorHistory.length > 0) {
+      errorPoints = result.errorHistory
+        .map(item => ({ x: item.n || item.iteration, y: item.errorVal, label: `n=${item.n || item.iteration}` }))
+        .filter(p => p.y !== null && !isNaN(p.y) && isFinite(p.y));
     } else if (result?.history) {
       errorPoints = result.history
         .map((item, idx) => {
@@ -959,7 +1235,7 @@ export default function App() {
       ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
       ctx.font = '13px Plus Jakarta Sans';
       ctx.textAlign = 'center';
-      ctx.fillText('Gráfica de convergencia de error no aplicable o cálculo completado en 1 paso.', width / 2, height / 2);
+      ctx.fillText('Gráfica de convergencia de error no disponible o cálculo completado en 1 paso.', width / 2, height / 2);
       return;
     }
 
@@ -971,7 +1247,7 @@ export default function App() {
     const minY = 0;
     const maxY = Math.max(...ys) * 1.15 || 10;
 
-    const toX = (x) => 50 + ((x - minX) / (maxX - minX)) * (width - 80);
+    const toX = (x) => 55 + ((x - minX) / (maxX - minX)) * (width - 85);
     const toY = (y) => height - 30 - (y / maxY) * (height - 50);
 
     // Grid lines
@@ -980,7 +1256,7 @@ export default function App() {
     for (let i = 0; i <= 5; i++) {
       const gy = 20 + (i / 5) * (height - 50);
       ctx.beginPath();
-      ctx.moveTo(50, gy);
+      ctx.moveTo(55, gy);
       ctx.lineTo(width - 30, gy);
       ctx.stroke();
 
@@ -988,15 +1264,15 @@ export default function App() {
       ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
       ctx.font = '10px JetBrains Mono';
       ctx.textAlign = 'right';
-      ctx.fillText(`${yVal.toFixed(2)}%`, 45, gy + 3);
+      ctx.fillText(`${yVal.toFixed(2)}%`, 50, gy + 3);
     }
 
     // Axes
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(50, 20);
-    ctx.lineTo(50, height - 30);
+    ctx.moveTo(55, 20);
+    ctx.lineTo(55, height - 30);
     ctx.lineTo(width - 30, height - 30);
     ctx.stroke();
 
@@ -1004,11 +1280,11 @@ export default function App() {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
     ctx.font = '11px Plus Jakarta Sans';
     ctx.textAlign = 'left';
-    ctx.fillText('Error Relativo Ea (%)', 55, 16);
+    ctx.fillText('Error Relativo Aproximado Ea (%)', 60, 16);
     ctx.textAlign = 'right';
-    ctx.fillText('Iteración / Muestra', width - 30, height - 12);
+    ctx.fillText(result?.type === 'integration' ? 'Subintervalos (n)' : 'Iteración (i)', width - 30, height - 12);
 
-    // Plot Error Line (Pink / Rose Gradient)
+    // Plot Error Line
     ctx.beginPath();
     ctx.strokeStyle = '#f43f5e';
     ctx.lineWidth = 2.5;
@@ -1040,7 +1316,6 @@ export default function App() {
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
-      // Tick on X-axis
       ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
       ctx.font = '10px JetBrains Mono';
       ctx.textAlign = 'center';
@@ -1060,9 +1335,9 @@ export default function App() {
           <div className="authors-badge">
             <span>Laura Sofia Artunduaga Pulido - Tomás Felipe Lobo Berbesi</span>
           </div>
-          <h1 className="main-title">Vista tabulada con métodos numéricos</h1>
+          <h1 className="main-title">Proyecto Final — Métodos Numéricos</h1>
           <p className="main-subtitle">
-            Selecciona la familia y método numérico para desplegar sus parámetros requeridos
+            Plataforma interactiva de algoritmos numéricos, tablas de iteraciones y análisis de convergencia
           </p>
         </div>
 
@@ -1125,68 +1400,40 @@ export default function App() {
           })}
         </div>
 
-        {/* Active Selection Banner */}
-        {selectedCategory && (
-          <div className="method-selection-bar">
-            <div className="method-selection-info">
-              <span style={{ color: '#c4b5fd', fontSize: '0.9rem' }}>Grupo activo:</span>
-              <span style={{ color: '#ffffff', fontWeight: 600, fontSize: '0.95rem' }}>
-                {METHOD_CATEGORIES.find(c => c.id === selectedCategory)?.title}
-              </span>
-              {method && (
-                <>
-                  <span style={{ color: '#64748b' }}>•</span>
-                  <span style={{ color: '#c4b5fd', fontSize: '0.9rem' }}>Método:</span>
-                  <span className="method-selection-chip">{currentMethodName}</span>
-                </>
-              )}
-            </div>
-            <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-              Interfaz adaptada a los requerimientos del método
-            </span>
-          </div>
-        )}
-
         {/* Function Graph Section */}
         <div className="glass-panel">
           <div className="chart-container">
             <div className="chart-header">
               <span className="chart-title">
-                <Sparkles size={18} color="#d946ef" />
-                Gráfica del método — [{currentMethodName}]
+                Visualización Gráfica — {currentMethodName}
               </span>
-              <div className="legend-badge">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span className="dot dot-curve"></span> Curva f(x) / Modelo
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span className="dot dot-root"></span> Raíz / Óptimo / Área
-                </div>
-              </div>
+              <button 
+                type="button" 
+                className="test-case-btn" 
+                onClick={() => loadTestCase(method)}
+                title="Cargar los valores del caso de prueba propuesto en la rúbrica oficial"
+              >
+                <Sparkles size={14} /> Cargar caso de prueba de la rúbrica
+              </button>
             </div>
-
             <div className="canvas-wrapper">
               <canvas ref={canvasRef} />
             </div>
           </div>
         </div>
 
-        {/* Error Convergence Graph Section (Except Direct Interpolation) */}
-        {method !== 'interp_directa' && (
+        {/* Error Convergence Graph Section */}
+        {['biseccion', 'falsa_posicion', 'secante', 'newton_raphson', 'seccion_dorada_uni', 'seccion_dorada_multi', 'trapecio', 'simpson_18', 'simpson_38', 'regresion_mc'].includes(method) && (
           <div className="glass-panel">
             <div className="chart-container">
               <div className="chart-header">
                 <span className="chart-title" style={{ color: '#fca5a5' }}>
-                  <TrendingUp size={18} color="#f43f5e" />
-                  Gráfica del Error Relativo — [{currentMethodName}]
+                  Evolución del Error Relativo Aproximado (Ea %)
                 </span>
-                <div className="legend-badge">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span className="dot dot-root"></span> Error Relativo Ea (%) vs Iteración
-                  </div>
-                </div>
+                <span style={{ fontSize: '0.82rem', color: '#94a3b8' }}>
+                  {method === 'regresion_mc' ? 'Residuos por muestra observada' : 'Curva de convergencia por iteración'}
+                </span>
               </div>
-
               <div className="canvas-wrapper" style={{ height: '240px' }}>
                 <canvas ref={errorCanvasRef} />
               </div>
@@ -1214,10 +1461,12 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Specific for Newton-Raphson: Derivada f'(x) */}
+              {/* Specific for Newton-Raphson: Derivada f'(x) calculada automáticamente */}
               {method === 'newton_raphson' && (
                 <div>
-                  <label className="input-label">Derivada de la función f'(x)</label>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label className="input-label">Derivada analítica f'(x) [Calculada automáticamente]</label>
+                  </div>
                   <div className="function-input-wrapper">
                     <span className="function-icon" style={{ color: '#38bdf8' }}>f'(x)=</span>
                     <input
@@ -1225,7 +1474,7 @@ export default function App() {
                       className="function-input"
                       value={derivStr}
                       onChange={(e) => setDerivStr(e.target.value)}
-                      placeholder="Ejemplo: 3*x^2 - 1"
+                      placeholder="Calculada con math.derivative..."
                     />
                   </div>
                 </div>
@@ -1234,7 +1483,7 @@ export default function App() {
               <div className="limits-row">
                 <div>
                   <label className="input-label">
-                    {method === 'newton_raphson' ? 'Aproximación inicial x₀' : method === 'secante' ? 'Primera aproximación inicial x₀' : 'Límite A (inferior)'}
+                    {method === 'newton_raphson' ? 'Aproximación inicial x₀' : method === 'secante' ? 'Primera aproximación x₀ (x_{i-1})' : 'Límite inferior [xl / a]'}
                   </label>
                   <div className="stepper-input-group">
                     <button type="button" className="stepper-btn" onClick={() => setLimitA(prev => parseFloat((Number(prev) - 0.5).toFixed(2)))}><ChevronDown size={18} /></button>
@@ -1246,7 +1495,7 @@ export default function App() {
                 {method !== 'newton_raphson' && (
                   <div>
                     <label className="input-label">
-                      {method === 'secante' ? 'Segunda aproximación inicial x₁' : 'Límite B (superior)'}
+                      {method === 'secante' ? 'Segunda aproximación x₁ (x_i)' : 'Límite superior [xu / b]'}
                     </label>
                     <div className="stepper-input-group">
                       <button type="button" className="stepper-btn" onClick={() => setLimitB(prev => parseFloat((Number(prev) - 0.5).toFixed(2)))}><ChevronDown size={18} /></button>
@@ -1257,33 +1506,81 @@ export default function App() {
                 )}
               </div>
 
+              {/* Selector claro entre número de iteraciones y cifras significativas (Rúbrica 3) */}
               <div className="switch-params-row">
                 <div>
                   <label className="input-label">Criterio de parada</label>
                   <div className="mode-toggle-box">
-                    <button type="button" className={`mode-option-btn ${stopCondition === 'tolerance' ? 'active' : ''}`} onClick={() => setStopCondition('tolerance')}>Por Tolerancia</button>
-                    <button type="button" className={`mode-option-btn ${stopCondition === 'iterations' ? 'active' : ''}`} onClick={() => setStopCondition('iterations')}>Por Iteraciones</button>
+                    <button 
+                      type="button" 
+                      className={`mode-option-btn ${stopCondition === 'sig_figs' ? 'active' : ''}`} 
+                      onClick={() => setStopCondition('sig_figs')}
+                    >
+                      Cifras significativas
+                    </button>
+                    <button 
+                      type="button" 
+                      className={`mode-option-btn ${stopCondition === 'iterations' ? 'active' : ''}`} 
+                      onClick={() => setStopCondition('iterations')}
+                    >
+                      N° de Iteraciones
+                    </button>
+                    <button 
+                      type="button" 
+                      className={`mode-option-btn ${stopCondition === 'tolerance' ? 'active' : ''}`} 
+                      onClick={() => setStopCondition('tolerance')}
+                    >
+                      Tolerancia (ε)
+                    </button>
                   </div>
                 </div>
                 <div>
-                  <label className="input-label">{stopCondition === 'tolerance' ? 'Tolerancia deseada (ε)' : 'Iteraciones máximas'}</label>
+                  <label className="input-label">
+                    {stopCondition === 'sig_figs' ? 'Cifras significativas (m)' : stopCondition === 'iterations' ? 'Iteraciones máximas' : 'Tolerancia deseada (ε %)'}
+                  </label>
                   <div className="stepper-input-group">
-                    {stopCondition === 'tolerance' ? (
-                      <input type="number" step="any" className="stepper-input" value={tolerance} onChange={e => setTolerance(parseFloat(e.target.value) || 0.0001)} />
+                    {stopCondition === 'sig_figs' ? (
+                      <input 
+                        type="number" 
+                        min="1" 
+                        max="12" 
+                        className="stepper-input" 
+                        value={sigFigs} 
+                        onChange={e => setSigFigs(parseInt(e.target.value, 10) || 1)} 
+                      />
+                    ) : stopCondition === 'iterations' ? (
+                      <input 
+                        type="number" 
+                        min="1" 
+                        className="stepper-input" 
+                        value={iterations} 
+                        onChange={e => setIterations(parseInt(e.target.value, 10) || 1)} 
+                      />
                     ) : (
-                      <input type="number" min="1" className="stepper-input" value={iterations} onChange={e => setIterations(parseInt(e.target.value, 10) || 1)} />
+                      <input 
+                        type="number" 
+                        step="any" 
+                        className="stepper-input" 
+                        value={tolerance} 
+                        onChange={e => setTolerance(parseFloat(e.target.value) || 0.0001)} 
+                      />
                     )}
                   </div>
+                  {stopCondition === 'sig_figs' && (
+                    <div className="sig-figs-info">
+                      Criterio de Scarborough: Es = 0.5 × 10^(2 - {sigFigs})% = {scarboroughTol.toFixed(6)}%
+                    </div>
+                  )}
                 </div>
               </div>
             </>
           )}
 
-          {/* CASE 2: INTEGRACIÓN NUMÉRICA (Trapecio, Simpson 1/8, Simpson 3/8) */}
+          {/* CASE 2: INTEGRACIÓN NUMÉRICA (Trapecio, Simpson 1/3, Simpson 3/8) */}
           {['trapecio', 'simpson_18', 'simpson_38'].includes(method) && (
             <>
               <div>
-                <label className="input-label">Tipo de entrada</label>
+                <label className="input-label">Modo de integración</label>
                 <div className="mode-toggle-box">
                   <button 
                     type="button" 
@@ -1313,7 +1610,7 @@ export default function App() {
                         className="function-input"
                         value={funcStr}
                         onChange={(e) => setFuncStr(e.target.value)}
-                        placeholder="Ejemplo: x^2 + 2*x + 1"
+                        placeholder="Ejemplo: sin(x)"
                       />
                     </div>
                   </div>
@@ -1331,7 +1628,7 @@ export default function App() {
 
                   <div>
                     <label className="input-label">
-                      Número de subintervalos n {method === 'simpson_18' ? '(Debe ser PAR)' : method === 'simpson_38' ? '(Debe ser MÚLTIPLO DE 3)' : '(Cualquier entero ≥ 1)'}
+                      Número de subintervalos n {method === 'simpson_18' ? '(Exige n PAR)' : method === 'simpson_38' ? '(Exige n MÚLTIPLO DE 3)' : '(Cualquier entero ≥ 1)'}
                     </label>
                     <div className="stepper-input-group">
                       <button 
@@ -1417,7 +1714,7 @@ export default function App() {
           {method === 'seccion_dorada_uni' && (
             <>
               <div>
-                <label className="input-label">Función objetivo unimodal f(x)</label>
+                <label className="input-label">Función objetivo f(x)</label>
                 <div className="function-input-wrapper">
                   <span className="function-icon">f(x)=</span>
                   <input
@@ -1432,26 +1729,42 @@ export default function App() {
 
               <div className="limits-row">
                 <div>
-                  <label className="input-label">Límite inferior del intervalo [a]</label>
+                  <label className="input-label">Límite inferior [xl / a]</label>
                   <input type="number" step="any" className="stepper-input" style={{ background: 'rgba(14, 8, 24, 0.8)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }} value={limitA} onChange={e => setLimitA(parseFloat(e.target.value) || 0)} />
                 </div>
                 <div>
-                  <label className="input-label">Límite superior del intervalo [b]</label>
+                  <label className="input-label">Límite superior [xu / b]</label>
                   <input type="number" step="any" className="stepper-input" style={{ background: 'rgba(14, 8, 24, 0.8)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }} value={limitB} onChange={e => setLimitB(parseFloat(e.target.value) || 0)} />
                 </div>
               </div>
 
               <div className="switch-params-row">
                 <div>
-                  <label className="input-label">Meta de Optimización</label>
+                  <label className="input-label">Objetivo de Optimización</label>
                   <div className="mode-toggle-box">
                     <button type="button" className={`mode-option-btn ${optiGoal === 'max' ? 'active' : ''}`} onClick={() => setOptiGoal('max')}>Encontrar Máximo</button>
                     <button type="button" className={`mode-option-btn ${optiGoal === 'min' ? 'active' : ''}`} onClick={() => setOptiGoal('min')}>Encontrar Mínimo</button>
                   </div>
                 </div>
+
                 <div>
-                  <label className="input-label">Tolerancia del error (proporción áurea)</label>
-                  <input type="number" step="any" className="stepper-input" style={{ background: 'rgba(14, 8, 24, 0.8)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }} value={tolerance} onChange={e => setTolerance(parseFloat(e.target.value) || 0.0001)} />
+                  <label className="input-label">Criterio de parada</label>
+                  <div className="mode-toggle-box">
+                    <button type="button" className={`mode-option-btn ${stopCondition === 'sig_figs' ? 'active' : ''}`} onClick={() => setStopCondition('sig_figs')}>Cifras significativas</button>
+                    <button type="button" className={`mode-option-btn ${stopCondition === 'iterations' ? 'active' : ''}`} onClick={() => setStopCondition('iterations')}>N° de Iteraciones</button>
+                  </div>
+                  <div className="stepper-input-group" style={{ marginTop: '0.5rem' }}>
+                    {stopCondition === 'sig_figs' ? (
+                      <input type="number" min="1" max="10" className="stepper-input" value={sigFigs} onChange={e => setSigFigs(parseInt(e.target.value, 10) || 1)} />
+                    ) : (
+                      <input type="number" min="1" className="stepper-input" value={iterations} onChange={e => setIterations(parseInt(e.target.value, 10) || 1)} />
+                    )}
+                  </div>
+                  {stopCondition === 'sig_figs' && (
+                    <div className="sig-figs-info">
+                      Es = 0.5 × 10^(2 - {sigFigs})% = {scarboroughTol.toFixed(6)}%
+                    </div>
+                  )}
                 </div>
               </div>
             </>
@@ -1469,7 +1782,7 @@ export default function App() {
                     className="function-input"
                     value={multiFuncStr}
                     onChange={(e) => setMultiFuncStr(e.target.value)}
-                    placeholder="2*x*y + 2*x - x^2 - 2*y^2"
+                    placeholder="(x - 1)^2 + (y + 2)^2"
                   />
                 </div>
               </div>
@@ -1480,31 +1793,17 @@ export default function App() {
                   <div className="dual-input-group">
                     <div className="coord-field">
                       <span className="coord-label">x₀:</span>
-                      <input 
-                        type="number" 
-                        step="any" 
-                        className="coord-input" 
-                        placeholder="0" 
-                        value={multiX0} 
-                        onChange={e => setMultiX0(parseFloat(e.target.value) || 0)} 
-                      />
+                      <input type="number" step="any" className="coord-input" value={multiX0} onChange={e => setMultiX0(parseFloat(e.target.value) || 0)} />
                     </div>
                     <div className="coord-field">
                       <span className="coord-label">y₀:</span>
-                      <input 
-                        type="number" 
-                        step="any" 
-                        className="coord-input" 
-                        placeholder="0" 
-                        value={multiY0} 
-                        onChange={e => setMultiY0(parseFloat(e.target.value) || 0)} 
-                      />
+                      <input type="number" step="any" className="coord-input" value={multiY0} onChange={e => setMultiY0(parseFloat(e.target.value) || 0)} />
                     </div>
                   </div>
                 </div>
 
                 <div>
-                  <label className="input-label">Direcciones y Meta</label>
+                  <label className="input-label">Objetivo</label>
                   <div className="mode-toggle-box">
                     <button type="button" className={`mode-option-btn ${optiGoal === 'max' ? 'active' : ''}`} onClick={() => setOptiGoal('max')}>Maximizar</button>
                     <button type="button" className={`mode-option-btn ${optiGoal === 'min' ? 'active' : ''}`} onClick={() => setOptiGoal('min')}>Minimizar</button>
@@ -1518,25 +1817,11 @@ export default function App() {
                   <div className="dual-input-group">
                     <div className="coord-field">
                       <span className="coord-label">x:</span>
-                      <input 
-                        type="number" 
-                        step="any" 
-                        className="coord-input" 
-                        placeholder="x_min" 
-                        value={multiLimX[0]} 
-                        onChange={e => setMultiLimX([parseFloat(e.target.value) || 0, multiLimX[1]])} 
-                      />
+                      <input type="number" step="any" className="coord-input" value={multiLimX[0]} onChange={e => setMultiLimX([parseFloat(e.target.value) || 0, multiLimX[1]])} />
                     </div>
                     <div className="coord-field">
                       <span className="coord-label">y:</span>
-                      <input 
-                        type="number" 
-                        step="any" 
-                        className="coord-input" 
-                        placeholder="y_min" 
-                        value={multiLimY[0]} 
-                        onChange={e => setMultiLimY([parseFloat(e.target.value) || 0, multiLimY[1]])} 
-                      />
+                      <input type="number" step="any" className="coord-input" value={multiLimY[0]} onChange={e => setMultiLimY([parseFloat(e.target.value) || 0, multiLimY[1]])} />
                     </div>
                   </div>
                 </div>
@@ -1546,25 +1831,11 @@ export default function App() {
                   <div className="dual-input-group">
                     <div className="coord-field">
                       <span className="coord-label">x:</span>
-                      <input 
-                        type="number" 
-                        step="any" 
-                        className="coord-input" 
-                        placeholder="x_max" 
-                        value={multiLimX[1]} 
-                        onChange={e => setMultiLimX([multiLimX[0], parseFloat(e.target.value) || 0])} 
-                      />
+                      <input type="number" step="any" className="coord-input" value={multiLimX[1]} onChange={e => setMultiLimX([multiLimX[0], parseFloat(e.target.value) || 0])} />
                     </div>
                     <div className="coord-field">
                       <span className="coord-label">y:</span>
-                      <input 
-                        type="number" 
-                        step="any" 
-                        className="coord-input" 
-                        placeholder="y_max" 
-                        value={multiLimY[1]} 
-                        onChange={e => setMultiLimY([multiLimY[0], parseFloat(e.target.value) || 0])} 
-                      />
+                      <input type="number" step="any" className="coord-input" value={multiLimY[1]} onChange={e => setMultiLimY([multiLimY[0], parseFloat(e.target.value) || 0])} />
                     </div>
                   </div>
                 </div>
@@ -1574,109 +1845,142 @@ export default function App() {
                 <div>
                   <label className="input-label">Criterio de parada</label>
                   <div className="mode-toggle-box">
-                    <button type="button" className={`mode-option-btn ${stopCondition === 'tolerance' ? 'active' : ''}`} onClick={() => setStopCondition('tolerance')}>Por Tolerancia</button>
-                    <button type="button" className={`mode-option-btn ${stopCondition === 'iterations' ? 'active' : ''}`} onClick={() => setStopCondition('iterations')}>Por Ciclos Fijos</button>
+                    <button type="button" className={`mode-option-btn ${stopCondition === 'sig_figs' ? 'active' : ''}`} onClick={() => setStopCondition('sig_figs')}>Cifras significativas</button>
+                    <button type="button" className={`mode-option-btn ${stopCondition === 'iterations' ? 'active' : ''}`} onClick={() => setStopCondition('iterations')}>N° de Iteraciones</button>
                   </div>
                 </div>
                 <div>
-                  <label className="input-label">{stopCondition === 'tolerance' ? 'Tolerancia entre ciclos' : 'Número de ciclos'}</label>
+                  <label className="input-label">{stopCondition === 'sig_figs' ? 'Cifras significativas (m)' : 'Número de iteraciones'}</label>
                   <div className="stepper-input-group">
-                    {stopCondition === 'tolerance' ? (
-                      <input type="number" step="any" className="stepper-input" value={tolerance} onChange={e => setTolerance(parseFloat(e.target.value) || 0.0001)} />
+                    {stopCondition === 'sig_figs' ? (
+                      <input type="number" min="1" max="10" className="stepper-input" value={sigFigs} onChange={e => setSigFigs(parseInt(e.target.value, 10) || 1)} />
                     ) : (
                       <input type="number" min="1" className="stepper-input" value={iterations} onChange={e => setIterations(parseInt(e.target.value, 10) || 1)} />
                     )}
                   </div>
+                  {stopCondition === 'sig_figs' && (
+                    <div className="sig-figs-info">
+                      Es = 0.5 × 10^(2 - {sigFigs})% = {scarboroughTol.toFixed(6)}%
+                    </div>
+                  )}
                 </div>
               </div>
             </>
           )}
 
-          {/* CASE 5: INTERPOLACIÓN DIRECTA */}
-          {method === 'interp_directa' && (
+          {/* CASE 5 & 6: INTERPOLACIÓN Y REGRESIÓN (Con Carga de Archivo y Selector de Columnas - Rúbrica 3) */}
+          {(method === 'interp_directa' || method === 'regresion_mc') && (
             <>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                  <label className="input-label" style={{ margin: 0 }}>
-                    Conjunto de n+1 puntos (xᵢ, yᵢ) [Determina grado {points.length - 1}]
-                  </label>
-                  <button type="button" className="add-pt-btn" onClick={handleAddPoint}>
-                    <Plus size={16} /> Añadir punto
+              {/* File upload section */}
+              <div className="file-upload-card">
+                <div className="file-upload-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <FileText size={20} color="#c084fc" />
+                    <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>Carga de datos desde archivo (CSV, TXT, TSV)</span>
+                  </div>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    style={{ display: 'none' }}
+                    accept=".csv,.txt,.tsv,.dat"
+                    onChange={handleFileUpload}
+                  />
+                  <button 
+                    type="button" 
+                    className="file-upload-btn" 
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload size={16} /> Seleccionar archivo
                   </button>
                 </div>
 
-                <div className="points-table-container">
-                  {points.map((pt, idx) => (
-                    <div key={idx} className="point-row">
-                      <span className="point-index">P{idx}</span>
-                      <input
-                        type="number"
-                        step="any"
-                        placeholder="xᵢ"
-                        className="stepper-input"
-                        style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}
-                        value={pt.x}
-                        onChange={(e) => handlePointChange(idx, 'x', e.target.value)}
-                      />
-                      <input
-                        type="number"
-                        step="any"
-                        placeholder="yᵢ"
-                        className="stepper-input"
-                        style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}
-                        value={pt.y}
-                        onChange={(e) => handlePointChange(idx, 'y', e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className="remove-pt-btn"
-                        onClick={() => handleRemovePoint(idx)}
-                        title="Eliminar punto"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                {uploadedFileName && fileHeaders.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    <div className="file-status-tag">
+                      <Check size={16} /> Archivo: {uploadedFileName} ({fileRows.length} filas detectadas)
                     </div>
-                  ))}
+
+                    <div className="column-selectors-grid">
+                      <div>
+                        <label className="input-label" style={{ margin: 0, fontSize: '0.8rem' }}>Elección de columna para X</label>
+                        <select 
+                          className="select-model-dropdown" 
+                          value={colX}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10);
+                            setColX(val);
+                            applyColumns(fileRows, val, colY);
+                          }}
+                        >
+                          {fileHeaders.map((h, i) => (
+                            <option key={i} value={i}>{h} (Columna {i + 1})</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="input-label" style={{ margin: 0, fontSize: '0.8rem' }}>Elección de columna para f(x) / Y</label>
+                        <select 
+                          className="select-model-dropdown" 
+                          value={colY}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10);
+                            setColY(val);
+                            applyColumns(fileRows, colX, val);
+                          }}
+                        >
+                          {fileHeaders.map((h, i) => (
+                            <option key={i} value={i}>{h} (Columna {i + 1})</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Selector de Polinomio para Regresión (Rúbrica 2 y 3) */}
+              {method === 'regresion_mc' && (
+                <div className="limits-row">
+                  <div>
+                    <label className="input-label">Selector del modelo / polinomio</label>
+                    <select 
+                      className="select-model-dropdown"
+                      value={regModel}
+                      onChange={(e) => setRegModel(e.target.value)}
+                    >
+                      <option value="polinomial">Ajuste Polinomial (Grado m configurable)</option>
+                      <option value="exponencial">Modelo Exponencial: y = a·e^(b·x)</option>
+                    </select>
+                  </div>
+
+                  {regModel === 'polinomial' && (
+                    <div>
+                      <label className="input-label">Grado del polinomio elegido (m)</label>
+                      <select 
+                        className="select-model-dropdown"
+                        value={regDegree}
+                        onChange={(e) => setRegDegree(parseInt(e.target.value, 10))}
+                      >
+                        <option value={1}>Grado 1 — Lineal: y = a₁·x + a₀</option>
+                        <option value={2}>Grado 2 — Cuadrático: y = a₂·x² + a₁·x + a₀</option>
+                        <option value={3}>Grado 3 — Cúbico: y = a₃·x³ + a₂·x² + a₁·x + a₀</option>
+                        <option value={4}>Grado 4 — Polinomio cuarto orden</option>
+                        <option value={5}>Grado 5 — Polinomio quinto orden</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
 
-              <div>
-                <label className="input-label">Valor x donde se quiere estimar y (x_eval)</label>
-                <input
-                  type="number"
-                  step="any"
-                  className="stepper-input"
-                  style={{ background: 'rgba(14, 8, 24, 0.8)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', width: '100%' }}
-                  value={xEval}
-                  onChange={(e) => setXEval(parseFloat(e.target.value) || 0)}
-                />
-              </div>
-            </>
-          )}
-
-          {/* CASE 6: REGRESIÓN POR MÍNIMOS CUADRADOS */}
-          {method === 'regresion_mc' && (
-            <>
-              <div>
-                <label className="input-label">Tipo de modelo a ajustar</label>
-                <select 
-                  className="select-model-dropdown"
-                  value={regModel}
-                  onChange={(e) => setRegModel(e.target.value)}
-                >
-                  <option value="lineal">Regresión Lineal: y = m·x + b</option>
-                  <option value="polinomial_2">Regresión Polinomial Grado 2: y = a₂·x² + a₁·x + a₀</option>
-                  <option value="exponencial">Regresión Exponencial: y = a·e^(b·x)</option>
-                </select>
-              </div>
-
+              {/* Points table editor */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                   <label className="input-label" style={{ margin: 0 }}>
-                    Serie de puntos observados (xᵢ, yᵢ)
+                    Datos cargados / puntos ({points.length} puntos observados)
                   </label>
                   <button type="button" className="add-pt-btn" onClick={handleAddPoint}>
-                    <Plus size={16} /> Añadir dato
+                    <Plus size={16} /> Añadir fila
                   </button>
                 </div>
 
@@ -1714,6 +2018,19 @@ export default function App() {
                   ))}
                 </div>
               </div>
+
+              {/* Evaluación en un x dado (Rúbrica 1) */}
+              <div>
+                <label className="input-label">Evaluación del modelo / curva ajustada en un valor x dado (x_eval)</label>
+                <input
+                  type="number"
+                  step="any"
+                  className="stepper-input"
+                  style={{ background: 'rgba(14, 8, 24, 0.8)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', width: '100%' }}
+                  value={xEval}
+                  onChange={(e) => setXEval(parseFloat(e.target.value) || 0)}
+                />
+              </div>
             </>
           )}
 
@@ -1721,7 +2038,7 @@ export default function App() {
           <div className="action-row">
             <button className="compute-btn" onClick={runCalculation}>
               <Play size={20} fill="#ffffff" />
-              Calcular {currentMethodName}
+              Ejecutar {currentMethodName}
             </button>
           </div>
         </div>
@@ -1732,7 +2049,7 @@ export default function App() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
               <AlertCircle size={28} color="#f87171" />
               <div>
-                <div className="result-title">Error en los datos ingresados</div>
+                <div className="result-title">Validación / Error en el cálculo</div>
                 <div style={{ color: '#fecaca', fontSize: '0.95rem', marginTop: '0.2rem' }}>
                   {errorMsg}
                 </div>
@@ -1748,43 +2065,50 @@ export default function App() {
               {result.type === 'integration' && (
                 <div>
                   <div className="result-value">Integral I ≈ {result.integral.toFixed(6)}</div>
-                  <div style={{ color: '#86efac', fontSize: '0.95rem', marginTop: '0.2rem' }}>
-                    En el intervalo [{result.a}, {result.b}] con {result.n} subintervalos (h = {result.h.toFixed(5)})
+                  <div className="result-subtext">
+                    Evaluada con {result.n} subintervalos (paso h = {result.h.toFixed(6)})
                   </div>
                 </div>
               )}
 
-              {/* Root */}
+              {/* Root finding */}
               {result.type === 'root' && (
-                <div className="result-value">Raíz x ≈ {result.value.toFixed(6)}</div>
+                <div>
+                  <div className="result-value">Raíz x* ≈ {result.value.toFixed(6)}</div>
+                  <div className="result-subtext">
+                    f(x*) = {result.fval.toExponential(4)} en {result.iterationsCount} iteraciones
+                  </div>
+                </div>
               )}
 
-              {/* Golden Section Univariate */}
+              {/* Golden section univariate */}
               {result.type === 'opti_uni' && (
                 <div>
-                  <div className="result-value">x* = {result.value.toFixed(6)}</div>
-                  <div style={{ color: '#86efac', fontSize: '0.95rem', marginTop: '0.2rem' }}>
-                    f(x*) = {result.fval.toFixed(6)} ({optiGoal === 'max' ? 'Máximo' : 'Mínimo'} local)
+                  <div className="result-value">Óptimo x* ≈ {result.value.toFixed(5)}</div>
+                  <div className="result-subtext">
+                    Valor óptimo f(x*) = {result.fval.toFixed(5)} ({optiGoal === 'max' ? 'Máximo' : 'Mínimo'} local alcanzado)
                   </div>
                 </div>
               )}
 
-              {/* Golden Section Multivariate */}
+              {/* Golden section multivariate */}
               {result.type === 'opti_multi' && (
                 <div>
-                  <div className="result-value">Óptimo: ({result.optPoint.x.toFixed(4)}, {result.optPoint.y.toFixed(4)})</div>
-                  <div style={{ color: '#86efac', fontSize: '0.95rem', marginTop: '0.2rem' }}>
-                    f(x*, y*) = {result.fval.toFixed(6)}
+                  <div className="result-value">
+                    Punto óptimo: ({result.optPoint.x.toFixed(4)}, {result.optPoint.y.toFixed(4)})
+                  </div>
+                  <div className="result-subtext">
+                    f(x*, y*) = {result.fval.toFixed(5)} en {result.iterationsCount} pasos
                   </div>
                 </div>
               )}
 
-              {/* Interpolation */}
+              {/* Direct interpolation */}
               {result.type === 'interpolation' && (
                 <div>
-                  <div className="result-value">y({result.xEval}) ≈ {result.yEstimated.toFixed(6)}</div>
-                  <div style={{ color: '#e9d5ff', fontFamily: 'JetBrains Mono', fontSize: '0.95rem', marginTop: '0.35rem' }}>
-                    P_{result.degree}(x) = {result.polyStr}
+                  <div className="result-value">p({result.xEval}) = {result.yEstimated.toFixed(5)}</div>
+                  <div className="result-subtext" style={{ wordBreak: 'break-all' }}>
+                    Polinomio ajustado: <strong>p(x) = {result.polyStr}</strong>
                   </div>
                 </div>
               )}
@@ -1792,9 +2116,13 @@ export default function App() {
               {/* Regression */}
               {result.type === 'regression' && (
                 <div>
-                  <div className="result-value">{result.modelStr}</div>
-                  <div style={{ color: '#86efac', fontSize: '0.95rem', marginTop: '0.35rem' }}>
-                    Coeficiente de Determinación R² = {(result.r2 * 100).toFixed(2)}%
+                  <div className="result-value">
+                    Modelo: {result.modelStr}
+                  </div>
+                  <div className="result-subtext">
+                    Coeficiente de determinación: <strong>R² = {result.r2.toFixed(4)}</strong> (Ajuste {(result.r2 * 100).toFixed(2)}%)
+                    <br />
+                    Evaluación en x = {result.xEval}: <strong>ŷ({result.xEval}) = {result.yEstimated.toFixed(5)}</strong>
                   </div>
                 </div>
               )}
@@ -1819,19 +2147,19 @@ export default function App() {
               )}
               {result.iterationsCount && (
                 <div className="stat-item">
-                  Iteraciones/Ciclos: <strong>{result.iterationsCount}</strong>
+                  Iteraciones: <strong>{result.iterationsCount}</strong>
                 </div>
               )}
               {result.degree !== undefined && (
                 <div className="stat-item">
-                  Grado: <strong>{result.degree}</strong>
+                  Grado del polinomio: <strong>{result.degree}</strong>
                 </div>
               )}
             </div>
           </div>
         ) : null}
 
-        {/* Iterations / Evaluation Points Table Dropdown */}
+        {/* Iterations / Evaluation Points Table (Columnas exactas exigidas por la Rúbrica 1) */}
         {result?.history && result.history.length > 0 && (
           <div className="glass-panel" style={{ padding: '1.25rem' }}>
             <button
@@ -1839,7 +2167,7 @@ export default function App() {
               onClick={() => setShowTable(!showTable)}
             >
               <TableIcon size={18} />
-              {showTable ? 'Ocultar tabla de detalle' : 'Ver tabla de detalle'}
+              {showTable ? 'Ocultar tabla de iteraciones' : 'Ver tabla de iteraciones'}
             </button>
 
             {showTable && (
@@ -1847,43 +2175,119 @@ export default function App() {
                 <table>
                   <thead>
                     <tr>
-                      {result.type === 'integration' ? (
+                      {/* Bisección: i, xl, xu, xr, f(xl), f(xr), f(xl)·f(xr), error aproximado (%) */}
+                      {method === 'biseccion' && (
                         <>
                           <th style={{ textAlign: 'center' }}>i</th>
-                          <th>xᵢ</th>
-                          <th>f(xᵢ)</th>
+                          <th>xl</th>
+                          <th>xu</th>
+                          <th>xr</th>
+                          <th>f(xl)</th>
+                          <th>f(xr)</th>
+                          <th>f(xl)·f(xr)</th>
+                          <th>Error aproximado (%)</th>
                         </>
-                      ) : (
+                      )}
+
+                      {/* Falsa Posición: i, xl, xu, xr, f(xl), f(xu), f(xr), error aproximado (%) */}
+                      {method === 'falsa_posicion' && (
+                        <>
+                          <th style={{ textAlign: 'center' }}>i</th>
+                          <th>xl</th>
+                          <th>xu</th>
+                          <th>xr</th>
+                          <th>f(xl)</th>
+                          <th>f(xu)</th>
+                          <th>f(xr)</th>
+                          <th>Error aproximado (%)</th>
+                        </>
+                      )}
+
+                      {/* Newton-Raphson: i, x_i, f(x_i), f'(x_i), x_(i+1), error aproximado (%) */}
+                      {method === 'newton_raphson' && (
+                        <>
+                          <th style={{ textAlign: 'center' }}>i</th>
+                          <th>x_i</th>
+                          <th>f(x_i)</th>
+                          <th>f'(x_i)</th>
+                          <th>x_(i+1)</th>
+                          <th>Error aproximado (%)</th>
+                        </>
+                      )}
+
+                      {/* Secante: i, x_(i-1), x_i, f(x_(i-1)), f(x_i), x_(i+1), error aproximado (%) */}
+                      {method === 'secante' && (
+                        <>
+                          <th style={{ textAlign: 'center' }}>i</th>
+                          <th>x_(i-1)</th>
+                          <th>x_i</th>
+                          <th>f(x_(i-1))</th>
+                          <th>f(x_i)</th>
+                          <th>x_(i+1)</th>
+                          <th>Error aproximado (%)</th>
+                        </>
+                      )}
+
+                      {/* Trapecio, Simpson 1/3, Simpson 3/8: Iteración, n, h, integral aproximada, error aproximado (%) */}
+                      {['trapecio', 'simpson_18', 'simpson_38'].includes(method) && (
                         <>
                           <th style={{ textAlign: 'center' }}>Iteración</th>
-                          {result.type === 'opti_uni' ? (
-                            <>
-                              <th>x_l</th>
-                              <th>x_u</th>
-                              <th>x₁</th>
-                              <th>x₂</th>
-                              <th>x* (Óptimo)</th>
-                              <th>f(x*)</th>
-                              <th>Error (%)</th>
-                            </>
-                          ) : result.type === 'opti_multi' ? (
-                            <>
-                              <th>x*</th>
-                              <th>y*</th>
-                              <th>f(x*, y*)</th>
-                              <th>Error (%)</th>
-                            </>
-                          ) : (
-                            <>
-                              <th>a</th>
-                              <th>b</th>
-                              <th>xr (Raíz)</th>
-                              <th>f(a)</th>
-                              <th>f(b)</th>
-                              <th>f(xr)</th>
-                              <th>Error (%)</th>
-                            </>
-                          )}
+                          <th>n (subintervalos)</th>
+                          <th>h (paso)</th>
+                          <th>Integral aproximada</th>
+                          <th>Error aproximado (%)</th>
+                        </>
+                      )}
+
+                      {/* Sección Áurea simple: i, xl, xu, x1, x2, f(x1), f(x2), error aproximado (%) */}
+                      {method === 'seccion_dorada_uni' && (
+                        <>
+                          <th style={{ textAlign: 'center' }}>i</th>
+                          <th>xl</th>
+                          <th>xu</th>
+                          <th>x1</th>
+                          <th>x2</th>
+                          <th>f(x1)</th>
+                          <th>f(x2)</th>
+                          <th>Error aproximado (%)</th>
+                        </>
+                      )}
+
+                      {/* Sección Áurea multivariada: i, coord activa, punto actual, xl, xu, x1, x2, f(x1), f(x2), error aproximado (%) */}
+                      {method === 'seccion_dorada_multi' && (
+                        <>
+                          <th style={{ textAlign: 'center' }}>i</th>
+                          <th>Coord. activa</th>
+                          <th>Punto actual (x, y)</th>
+                          <th>xl</th>
+                          <th>xu</th>
+                          <th>x1</th>
+                          <th>x2</th>
+                          <th>f(x1)</th>
+                          <th>f(x2)</th>
+                          <th>Error aproximado (%)</th>
+                        </>
+                      )}
+
+                      {/* Regresión por Mínimos Cuadrados */}
+                      {method === 'regresion_mc' && (
+                        <>
+                          <th style={{ textAlign: 'center' }}>Dato</th>
+                          <th>xᵢ</th>
+                          <th>yᵢ</th>
+                          <th>ŷ (modelo)</th>
+                          <th>Residuo (yᵢ - ŷ)</th>
+                          <th>Error relativo (%)</th>
+                        </>
+                      )}
+
+                      {/* Interpolación Directa */}
+                      {method === 'interp_directa' && (
+                        <>
+                          <th style={{ textAlign: 'center' }}>Punto</th>
+                          <th>xᵢ</th>
+                          <th>yᵢ</th>
+                          <th>p(xᵢ) evaluado</th>
                         </>
                       )}
                     </tr>
@@ -1891,45 +2295,119 @@ export default function App() {
                   <tbody>
                     {result.history.map((row, idx) => (
                       <tr key={idx}>
-                        {result.type === 'integration' ? (
+                        {/* Bisección */}
+                        {method === 'biseccion' && (
                           <>
-                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.i}</td>
-                            <td>{row.x.toFixed(4)}</td>
-                            <td style={{ color: '#38bdf8' }}>{row.y.toFixed(5)}</td>
+                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
+                            <td>{row.xl.toFixed(5)}</td>
+                            <td>{row.xu.toFixed(5)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.xr.toFixed(6)}</td>
+                            <td>{row.fxl.toFixed(5)}</td>
+                            <td>{row.fxr.toFixed(5)}</td>
+                            <td style={{ color: row.prod < 0 ? '#38bdf8' : '#f43f5e' }}>{row.prod.toExponential(3)}</td>
+                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
                           </>
-                        ) : (
+                        )}
+
+                        {/* Falsa Posición */}
+                        {method === 'falsa_posicion' && (
                           <>
-                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>
-                              {row.iteration}
-                            </td>
-                            {result.type === 'opti_uni' ? (
-                              <>
-                                <td>{row.xl.toFixed(4)}</td>
-                                <td>{row.xu.toFixed(4)}</td>
-                                <td>{row.x1.toFixed(4)}</td>
-                                <td>{row.x2.toFixed(4)}</td>
-                                <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.xOpt.toFixed(5)}</td>
-                                <td>{row.fOpt.toFixed(4)}</td>
-                                <td style={{ color: '#f43f5e' }}>{row.error}</td>
-                              </>
-                            ) : result.type === 'opti_multi' ? (
-                              <>
-                                <td style={{ color: '#38bdf8' }}>{row.xOpt.toFixed(5)}</td>
-                                <td style={{ color: '#38bdf8' }}>{row.yOpt.toFixed(5)}</td>
-                                <td>{row.fOpt.toFixed(5)}</td>
-                                <td style={{ color: '#f43f5e' }}>{row.error}</td>
-                              </>
-                            ) : (
-                              <>
-                                <td>{row.a.toFixed(5)}</td>
-                                <td>{row.b.toFixed(5)}</td>
-                                <td style={{ color: '#38bdf8', fontWeight: '600' }}>{row.xr.toFixed(6)}</td>
-                                <td>{row.fa.toFixed(4)}</td>
-                                <td>{row.fb.toFixed(4)}</td>
-                                <td>{row.fxr.toExponential(3)}</td>
-                                <td style={{ color: '#f43f5e' }}>{row.error}</td>
-                              </>
-                            )}
+                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
+                            <td>{row.xl.toFixed(5)}</td>
+                            <td>{row.xu.toFixed(5)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.xr.toFixed(6)}</td>
+                            <td>{row.fxl.toFixed(5)}</td>
+                            <td>{row.fxu.toFixed(5)}</td>
+                            <td>{row.fxr.toFixed(5)}</td>
+                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                          </>
+                        )}
+
+                        {/* Newton-Raphson */}
+                        {method === 'newton_raphson' && (
+                          <>
+                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
+                            <td>{row.xi.toFixed(6)}</td>
+                            <td>{row.fxi.toExponential(4)}</td>
+                            <td>{row.dfxi.toFixed(4)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.xnext.toFixed(6)}</td>
+                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                          </>
+                        )}
+
+                        {/* Secante */}
+                        {method === 'secante' && (
+                          <>
+                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
+                            <td>{row.xprev.toFixed(6)}</td>
+                            <td>{row.xi.toFixed(6)}</td>
+                            <td>{row.fxprev.toFixed(5)}</td>
+                            <td>{row.fxi.toFixed(5)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.xnext.toFixed(6)}</td>
+                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                          </>
+                        )}
+
+                        {/* Trapecio, Simpson 1/3, Simpson 3/8 */}
+                        {['trapecio', 'simpson_18', 'simpson_38'].includes(method) && (
+                          <>
+                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
+                            <td>{row.n}</td>
+                            <td>{row.h.toFixed(5)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.integral.toFixed(6)}</td>
+                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                          </>
+                        )}
+
+                        {/* Sección Áurea simple */}
+                        {method === 'seccion_dorada_uni' && (
+                          <>
+                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
+                            <td>{row.xl.toFixed(5)}</td>
+                            <td>{row.xu.toFixed(5)}</td>
+                            <td>{row.x1.toFixed(5)}</td>
+                            <td>{row.x2.toFixed(5)}</td>
+                            <td>{row.f1.toFixed(5)}</td>
+                            <td>{row.f2.toFixed(5)}</td>
+                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                          </>
+                        )}
+
+                        {/* Sección Áurea multivariada */}
+                        {method === 'seccion_dorada_multi' && (
+                          <>
+                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.activeCoord}</td>
+                            <td>({row.currX}, {row.currY})</td>
+                            <td>{row.xl.toFixed(4)}</td>
+                            <td>{row.xu.toFixed(4)}</td>
+                            <td>{row.x1.toFixed(4)}</td>
+                            <td>{row.x2.toFixed(4)}</td>
+                            <td>{row.f1.toFixed(4)}</td>
+                            <td>{row.f2.toFixed(4)}</td>
+                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                          </>
+                        )}
+
+                        {/* Regresión por Mínimos Cuadrados */}
+                        {method === 'regresion_mc' && (
+                          <>
+                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>P{row.i}</td>
+                            <td>{row.x}</td>
+                            <td>{row.y}</td>
+                            <td style={{ color: '#38bdf8' }}>{row.yPred}</td>
+                            <td style={{ color: '#f59e0b' }}>{row.residual}</td>
+                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                          </>
+                        )}
+
+                        {/* Interpolación Directa */}
+                        {method === 'interp_directa' && (
+                          <>
+                            <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>P{row.i}</td>
+                            <td>{row.x}</td>
+                            <td>{row.y}</td>
+                            <td style={{ color: '#38bdf8' }}>{row.pVal}</td>
                           </>
                         )}
                       </tr>
@@ -1943,7 +2421,7 @@ export default function App() {
 
         {/* Footer */}
         <footer className="footer-section">
-          <p>Proyecto de Métodos Numéricos</p>
+          <p>Proyecto Final de Métodos Numéricos</p>
           <p className="footer-authors">Laura Sofia Artunduaga Pulido - Tomás Felipe Lobo Berbesi</p>
         </footer>
 
