@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Component } from 'react';
 import * as math from 'mathjs';
 import { 
   ChevronUp, 
@@ -15,8 +15,55 @@ import {
   Trash2,
   Upload,
   FileText,
-  Check
+  Check,
+  RefreshCw
 } from 'lucide-react';
+
+// Error Boundary to prevent black screen on any unhandled error
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '2rem', textAlign: 'center', color: '#fff', background: '#0c0814', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <h2 style={{ color: '#f87171', marginBottom: '1rem' }}>Se ha recuperado de una excepción en la interfaz</h2>
+          <p style={{ color: '#cbd5e1', maxWidth: '600px', marginBottom: '1.5rem' }}>{this.state.error?.message || 'Error inesperado'}</p>
+          <button 
+            onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+            style={{ padding: '0.75rem 1.5rem', background: '#c084fc', color: '#000', fontWeight: 'bold', border: 'none', borderRadius: '10px', cursor: 'pointer' }}
+          >
+            Reiniciar aplicación
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Safe formatting helpers that never crash on undefined, null, or NaN
+const fmt = (v, digits = 4) => {
+  if (typeof v === 'number' && !isNaN(v) && isFinite(v)) {
+    return v.toFixed(digits);
+  }
+  return v !== undefined && v !== null && v !== '' ? String(v) : '-';
+};
+
+const fmtExp = (v, digits = 3) => {
+  if (typeof v === 'number' && !isNaN(v) && isFinite(v)) {
+    return v.toExponential(digits);
+  }
+  return v !== undefined && v !== null && v !== '' ? String(v) : '-';
+};
 
 const METHOD_CATEGORIES = [
   {
@@ -60,7 +107,7 @@ const METHOD_CATEGORIES = [
   }
 ];
 
-export default function App() {
+function MainApp() {
   const [selectedCategory, setSelectedCategory] = useState('raices');
   const [method, setMethod] = useState('biseccion');
 
@@ -70,13 +117,13 @@ export default function App() {
   const [limitA, setLimitA] = useState(1);
   const [limitB, setLimitB] = useState(2);
   const [tolerance, setTolerance] = useState(0.0001);
-  const [sigFigs, setSigFigs] = useState(4); // Criterio de Scarborough (Cifras significativas)
+  const [sigFigs, setSigFigs] = useState(4); // Criterio de Scarborough
   const [iterations, setIterations] = useState(20);
   const [stopCondition, setStopCondition] = useState('sig_figs'); // 'sig_figs' | 'iterations' | 'tolerance'
 
   // Integration inputs
   const [integInputType, setIntegInputType] = useState('function'); // 'function' | 'table'
-  const [integN, setIntegN] = useState(6); // Subintervals
+  const [integN, setIntegN] = useState(6);
   const [integPoints, setIntegPoints] = useState([
     { x: 0, y: 1 },
     { x: 1, y: 3 },
@@ -88,12 +135,12 @@ export default function App() {
   ]);
 
   // Optimization inputs
-  const [optiGoal, setOptiGoal] = useState('max'); // 'max' or 'min'
-  const [multiFuncStr, setMultiFuncStr] = useState('2*x*y + 2*x - x^2 - 2*y^2');
+  const [optiGoal, setOptiGoal] = useState('max');
+  const [multiFuncStr, setMultiFuncStr] = useState('(x - 1)^2 + (y + 2)^2');
   const [multiX0, setMultiX0] = useState(0);
   const [multiY0, setMultiY0] = useState(0);
-  const [multiLimX, setMultiLimX] = useState([-2, 4]);
-  const [multiLimY, setMultiLimY] = useState([-2, 4]);
+  const [multiLimX, setMultiLimX] = useState([-3, 5]);
+  const [multiLimY, setMultiLimY] = useState([-5, 3]);
 
   // Interpolation & Regression inputs
   const [points, setPoints] = useState([
@@ -103,8 +150,8 @@ export default function App() {
     { x: 4, y: 8.2 }
   ]);
   const [xEval, setXEval] = useState(2.5);
-  const [regModel, setRegModel] = useState('polinomial'); // 'polinomial' | 'exponencial'
-  const [regDegree, setRegDegree] = useState(1); // 1 = Lineal, 2 = Cuadrático, etc.
+  const [regModel, setRegModel] = useState('polinomial');
+  const [regDegree, setRegDegree] = useState(1);
 
   // File Upload State
   const fileInputRef = useRef(null);
@@ -189,7 +236,6 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  // Apply chosen columns to the active data points table
   const applyColumns = (rowsData, cx, cy) => {
     const rows = rowsData || fileRows;
     const parsed = [];
@@ -212,7 +258,6 @@ export default function App() {
     }
   };
 
-  // Add / remove points for Interpolation/Regression
   const handleAddPoint = () => {
     const nextX = points.length > 0 ? Number(points[points.length - 1].x) + 1 : 1;
     setPoints([...points, { x: nextX, y: 0 }]);
@@ -232,7 +277,6 @@ export default function App() {
     setPoints(updated);
   };
 
-  // Add / remove points for Integration Table
   const handleAddIntegPoint = () => {
     const lastX = integPoints.length > 0 ? Number(integPoints[integPoints.length - 1].x) : 0;
     const prevX = integPoints.length > 1 ? Number(integPoints[integPoints.length - 2].x) : lastX - 1;
@@ -254,14 +298,19 @@ export default function App() {
     setIntegPoints(updated);
   };
 
-  // Load Rubric Suggested Benchmark Cases (1-click verification)
+  // Load Rubric Suggested Benchmark Cases
   const loadTestCase = (mId) => {
     setErrorMsg('');
-    if (['biseccion', 'falsa_posicion', 'secante', 'newton_raphson'].includes(mId)) {
+    if (['biseccion', 'falsa_posicion', 'secante'].includes(mId)) {
       setFuncStr('x^3 - x - 2');
-      setDerivStr('3*x^2 - 1');
       setLimitA(1);
       setLimitB(2);
+      setStopCondition('sig_figs');
+      setSigFigs(4);
+    } else if (mId === 'newton_raphson') {
+      setFuncStr('x^3 - x - 2');
+      setDerivStr('3*x^2 - 1');
+      setLimitA(1.5);
       setStopCondition('sig_figs');
       setSigFigs(4);
     } else if (['trapecio', 'simpson_18', 'simpson_38'].includes(mId)) {
@@ -343,7 +392,7 @@ export default function App() {
     if (method === 'newton_raphson') {
       try {
         let dStr = derivStr;
-        if (!dStr.trim()) {
+        if (!dStr || !dStr.trim()) {
           const d = math.derivative(funcStr, 'x');
           dStr = d.toString();
           setDerivStr(dStr);
@@ -360,7 +409,6 @@ export default function App() {
     if (isNaN(a0)) throw new Error('El valor inicial x₀ / límite inferior debe ser un número válido.');
     if (method !== 'newton_raphson' && isNaN(b0)) throw new Error('El valor inicial x₁ / límite superior debe ser un número válido.');
 
-    // Bisección y Falsa Posición: Valida cambio de signo f(a)·f(b) < 0
     if (method === 'biseccion' || method === 'falsa_posicion') {
       if (a0 >= b0) throw new Error('El límite A debe ser estrictamente menor que el límite B.');
 
@@ -380,11 +428,10 @@ export default function App() {
     let a = a0, b = b0, xr = 0, xrPrev = 0, ea = 100;
     const history = [];
 
-    // Stopping criteria: Iterations vs Cifras significativas (Scarborough) vs Tolerancia directa
     const maxIters = stopCondition === 'iterations' ? parseInt(iterations, 10) : 100;
     let targetTol = 1e-12;
     if (stopCondition === 'sig_figs') {
-      targetTol = scarboroughTol; // Scarborough's criterion %
+      targetTol = scarboroughTol;
     } else if (stopCondition === 'tolerance') {
       targetTol = parseFloat(tolerance);
     }
@@ -413,7 +460,6 @@ export default function App() {
       const fxr = evaluateF(parsedExpr, { x: xr });
       const eaStr = iter === 1 ? '-' : ea.toFixed(6) + '%';
 
-      // Record exact columns demanded by the rubric for each method
       if (method === 'biseccion') {
         history.push({
           iteration: iter,
@@ -465,7 +511,6 @@ export default function App() {
       if (stopCondition !== 'iterations' && iter > 1 && ea < targetTol) break;
       if (Math.abs(fxr) < 1e-15) break;
 
-      // Interval / next step update
       if (method === 'biseccion' || method === 'falsa_posicion') {
         if (fa * fxr < 0) b = xr;
         else if (fa * fxr > 0) a = xr;
@@ -480,6 +525,7 @@ export default function App() {
     }
 
     setResult({
+      method,
       type: 'root',
       value: xr,
       fval: evaluateF(parsedExpr, { x: xr }),
@@ -492,7 +538,7 @@ export default function App() {
     });
   };
 
-  // 2. Numerical Integration Methods (Trapecio, Simpson 1/3, Simpson 3/8)
+  // 2. Numerical Integration Methods
   const runNumericalIntegration = () => {
     let a, b, n, xs = [], ys = [];
     let parsedExpr = null;
@@ -506,7 +552,6 @@ export default function App() {
       if (a >= b) throw new Error('El límite inferior a debe ser estrictamente menor que el límite superior b.');
       if (n < 1) throw new Error('El número de subintervalos n debe ser al menos 1.');
 
-      // Validation for Simpson rules according to rubric
       if (method === 'simpson_18' && n % 2 !== 0) {
         throw new Error(`Simpson 1/3 exige que el número de subintervalos n sea PAR. Valor actual: ${n}`);
       }
@@ -524,7 +569,6 @@ export default function App() {
         ys.push(yi);
       }
     } else {
-      // Table input mode
       const sorted = [...integPoints].sort((p1, p2) => p1.x - p2.x);
       xs = sorted.map(p => Number(p.x));
       ys = sorted.map(p => Number(p.y));
@@ -543,7 +587,7 @@ export default function App() {
       }
 
       if (method === 'simpson_18' && n % 2 !== 0) {
-        throw new Error(`Simpson 1/3 exige un número PAR de subintervalos (número impar de puntos). Puntos: ${xs.length} (n = ${n})`);
+        throw new Error(`Simpson 1/3 exige un número PAR de subintervalos. Puntos: ${xs.length} (n = ${n})`);
       }
       if (method === 'simpson_38' && n % 3 !== 0) {
         throw new Error(`Simpson 3/8 exige que n sea múltiplo de 3. Actualmente n = ${n}`);
@@ -577,9 +621,6 @@ export default function App() {
     const finalIntegral = computeIntegral(xs, ys, n);
     const finalH = (b - a) / n;
 
-    // Iterations table required by the Rubric:
-    // "Iteración, n, h, integral aproximada, error aproximado (%)"
-    // Shows how the approximation improves and error decreases as n increases
     const history = [];
     if (parsedExpr) {
       let stepSize = method === 'simpson_38' ? 3 : method === 'simpson_18' ? 2 : 1;
@@ -626,6 +667,7 @@ export default function App() {
     const lastErr = history[history.length - 1]?.errorVal || null;
 
     setResult({
+      method,
       type: 'integration',
       integral: finalIntegral,
       h: finalH,
@@ -656,7 +698,6 @@ export default function App() {
     if (isNaN(xl) || isNaN(xu)) throw new Error('Define los límites [a, b].');
     if (xl >= xu) throw new Error('El límite a debe ser estrictamente menor que el límite b.');
 
-    // Razón áurea: R = (sqrt(5) - 1) / 2 ≈ 0.6180339887
     const R = (Math.sqrt(5) - 1) / 2;
     let d = R * (xu - xl);
     let x1 = xl + d;
@@ -682,8 +723,6 @@ export default function App() {
         ea = Math.abs((1 - R) * (xu - xl) / (xOpt === 0 ? 1 : xOpt)) * 100;
       }
 
-      // Exact columns required by rubric:
-      // i, xl, xu, x1, x2, f(x1), f(x2), error aproximado (%)
       history.push({
         iteration: iter,
         xl,
@@ -700,7 +739,6 @@ export default function App() {
 
       if (stopCondition !== 'iterations' && iter > 1 && ea < targetTol) break;
 
-      // Reutiliza un punto interior (sólo evalúa 1 nuevo punto por paso)
       const condition = optiGoal === 'max' ? f1 > f2 : f1 < f2;
       if (condition) {
         xl = x2;
@@ -718,6 +756,7 @@ export default function App() {
     }
 
     setResult({
+      method,
       type: 'opti_uni',
       value: xOpt,
       fval: evaluateF(parsedExpr, { x: xOpt }),
@@ -756,7 +795,7 @@ export default function App() {
     let ea = 100;
 
     for (let c = 1; c <= maxCycles; c++) {
-      // 1) Opt along X holding Y fixed
+      // Opt along X
       let xl = multiLimX[0], xu = multiLimX[1];
       let d = R * (xu - xl);
       let x1 = xl + d, x2 = xu - d;
@@ -780,8 +819,6 @@ export default function App() {
       let eaX = Math.abs((currentValX - prevVal) / (currentValX === 0 ? 1 : currentValX)) * 100;
       prevVal = currentValX;
 
-      // Exact columns required by rubric:
-      // i, xl, xu, x1, x2, f(x1), f(x2), error aproximado (%); en multivariada, coordenada activa y punto actual
       history.push({
         iteration: stepCount,
         activeCoord: 'X',
@@ -797,7 +834,7 @@ export default function App() {
         errorVal: stepCount === 1 ? null : eaX
       });
 
-      // 2) Opt along Y holding X fixed
+      // Opt along Y
       let yl = multiLimY[0], yu = multiLimY[1];
       d = R * (yu - yl);
       let y1 = yl + d, y2 = yu - d;
@@ -841,6 +878,7 @@ export default function App() {
     }
 
     setResult({
+      method,
       type: 'opti_multi',
       optPoint: { x: currX, y: currY },
       fval: evaluateF(parsedExpr, { x: currX, y: currY }),
@@ -862,7 +900,6 @@ export default function App() {
       throw new Error('Todos los valores xᵢ deben ser distintos entre sí para interpolar.');
     }
 
-    // Vandermonde matrix: V_ij = x_i^j
     const V = [];
     for (let i = 0; i <= n; i++) {
       const row = [];
@@ -889,7 +926,6 @@ export default function App() {
 
     const parsedExpr = math.compile(polyStr.replace(/·/g, '*'));
 
-    // Detail table: points and p(x_i)
     const history = points.map((p, idx) => {
       let pVal = 0;
       for (let j = 0; j <= n; j++) pVal += coeffs[j] * Math.pow(p.x, j);
@@ -902,6 +938,7 @@ export default function App() {
     });
 
     setResult({
+      method,
       type: 'interpolation',
       degree: n,
       coeffs,
@@ -916,7 +953,7 @@ export default function App() {
     });
   };
 
-  // 6. Regresión por Mínimos Cuadrados (Polinomial de grado arbitrario m)
+  // 6. Regresión por Mínimos Cuadrados
   const runRegressionMC = () => {
     const n = points.length;
     if (n < 2) throw new Error('Se requieren al menos 2 puntos para la regresión.');
@@ -936,8 +973,6 @@ export default function App() {
         throw new Error(`Para ajustar un polinomio de grado ${m} se requieren al menos ${m + 1} puntos observados.`);
       }
 
-      // Normal equations for polynomial regression: A * a = B
-      // A_jk = sum(x^(j+k)), B_j = sum(x^j * y)
       const A = [];
       const B = [];
       for (let j = 0; j <= m; j++) {
@@ -954,7 +989,7 @@ export default function App() {
         B.push(sumXY);
       }
 
-      const aCoeffs = math.lusolve(A, B).map(v => v[0]); // [a0, a1, ..., am]
+      const aCoeffs = math.lusolve(A, B).map(v => v[0]);
 
       evalFunc = (x) => {
         let val = 0;
@@ -971,7 +1006,6 @@ export default function App() {
       modelStr = `y = ` + polyTerms.reverse().join(' + ').replace(/\+\s\-/g, '- ');
       parsedExpr = math.compile(modelStr.replace('y = ', '').replace(/·/g, '*'));
 
-      // Calculate R^2
       const meanY = math.sum(ys) / n;
       const ssTot = ys.reduce((acc, y) => acc + Math.pow(y - meanY, 2), 0);
       const ssRes = ys.reduce((acc, y, i) => acc + Math.pow(y - evalFunc(xs[i]), 2), 0);
@@ -1001,7 +1035,6 @@ export default function App() {
       yEstimated = evalFunc(xEval);
     }
 
-    // Points table with residuals and relative error
     const history = points.map((p, idx) => {
       const yPred = evalFunc(p.x);
       const residual = p.y - yPred;
@@ -1018,6 +1051,7 @@ export default function App() {
     });
 
     setResult({
+      method,
       type: 'regression',
       modelStr,
       r2: Math.max(0, r2),
@@ -1041,11 +1075,74 @@ export default function App() {
     setSelectedCategory(selectedCategory === catId ? null : catId);
   };
 
+  // Robust method switch: updates inputs to sensible defaults and clears stale results
   const handleSelectMethod = (catId, methodId) => {
     setSelectedCategory(catId);
     setMethod(methodId);
-    if (methodId === 'simpson_18' && integN % 2 !== 0) setIntegN(integN + 1);
-    if (methodId === 'simpson_38' && integN % 3 !== 0) setIntegN(Math.ceil(integN / 3) * 3 || 6);
+    setResult(null);
+    setErrorMsg('');
+
+    // Load appropriate defaults to ensure switching NEVER fails or clashes
+    if (['biseccion', 'falsa_posicion'].includes(methodId)) {
+      setFuncStr('x^3 - x - 2');
+      setLimitA(1);
+      setLimitB(2);
+      setStopCondition('sig_figs');
+      setSigFigs(4);
+    } else if (methodId === 'newton_raphson') {
+      setFuncStr('x^3 - x - 2');
+      setLimitA(1.5);
+      setStopCondition('sig_figs');
+      setSigFigs(4);
+      try {
+        const d = math.derivative('x^3 - x - 2', 'x');
+        setDerivStr(d.toString());
+      } catch {}
+    } else if (methodId === 'secante') {
+      setFuncStr('x^3 - x - 2');
+      setLimitA(1);
+      setLimitB(2);
+      setStopCondition('sig_figs');
+      setSigFigs(4);
+    } else if (['trapecio', 'simpson_18', 'simpson_38'].includes(methodId)) {
+      setFuncStr('sin(x)');
+      setLimitA(0);
+      setLimitB(3.141592653589793);
+      setIntegN(6);
+    } else if (methodId === 'seccion_dorada_uni') {
+      setFuncStr('2*sin(x) - x^2/10');
+      setLimitA(0);
+      setLimitB(4);
+      setOptiGoal('max');
+      setStopCondition('sig_figs');
+      setSigFigs(4);
+    } else if (methodId === 'seccion_dorada_multi') {
+      setMultiFuncStr('(x - 1)^2 + (y + 2)^2');
+      setMultiX0(0);
+      setMultiY0(0);
+      setMultiLimX([-3, 5]);
+      setMultiLimY([-5, 3]);
+      setOptiGoal('min');
+      setStopCondition('iterations');
+      setIterations(15);
+    } else if (methodId === 'interp_directa') {
+      setPoints([
+        { x: 1, y: 1 },
+        { x: 2, y: 8 },
+        { x: 3, y: 27 }
+      ]);
+      setXEval(2.5);
+    } else if (methodId === 'regresion_mc') {
+      setPoints([
+        { x: 1, y: 2 },
+        { x: 2, y: 4.1 },
+        { x: 3, y: 5.9 },
+        { x: 4, y: 8.2 }
+      ]);
+      setRegModel('polinomial');
+      setRegDegree(1);
+      setXEval(2.5);
+    }
   };
 
   // Draw Function / Curve Chart
@@ -1053,10 +1150,12 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const width = (canvas.width = canvas.parentElement.clientWidth);
-    const height = (canvas.height = canvas.parentElement.clientHeight);
+    const width = (canvas.width = canvas.parentElement.clientWidth || 400);
+    const height = (canvas.height = canvas.parentElement.clientHeight || 280);
 
     ctx.clearRect(0, 0, width, height);
+
+    if (!result || result.method !== method) return;
 
     let parsedExpr = result?.parsedExpr;
     if (!parsedExpr && ['biseccion', 'falsa_posicion', 'secante', 'newton_raphson', 'seccion_dorada_uni', 'trapecio', 'simpson_18', 'simpson_38'].includes(method)) {
@@ -1154,7 +1253,7 @@ export default function App() {
       ctx.stroke();
     }
 
-    // Plot observed data points (for regression/interpolation)
+    // Plot observed data points
     if (result?.points) {
       for (const p of result.points) {
         const px = toX(p.x);
@@ -1203,15 +1302,17 @@ export default function App() {
     }
   }, [result, funcStr, method]);
 
-  // Draw Error Convergence Chart (Rubric 1 requirement: coherente con la tabla de iteraciones)
+  // Draw Error Convergence Chart
   useEffect(() => {
     const canvas = errorCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const width = (canvas.width = canvas.parentElement.clientWidth);
-    const height = (canvas.height = canvas.parentElement.clientHeight);
+    const width = (canvas.width = canvas.parentElement.clientWidth || 400);
+    const height = (canvas.height = canvas.parentElement.clientHeight || 240);
 
     ctx.clearRect(0, 0, width, height);
+
+    if (!result || result.method !== method) return;
 
     let errorPoints = [];
     if (result?.errorHistory && result.errorHistory.length > 0) {
@@ -1235,7 +1336,7 @@ export default function App() {
       ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
       ctx.font = '13px Plus Jakarta Sans';
       ctx.textAlign = 'center';
-      ctx.fillText('Gráfica de convergencia de error no disponible o cálculo completado en 1 paso.', width / 2, height / 2);
+      ctx.fillText('Gráfica de convergencia de error no disponible o completado en 1 paso.', width / 2, height / 2);
       return;
     }
 
@@ -1321,7 +1422,7 @@ export default function App() {
       ctx.textAlign = 'center';
       ctx.fillText(`${p.x}`, px, height - 14);
     });
-  }, [result]);
+  }, [result, method]);
 
   const currentMethodObj = METHOD_CATEGORIES.flatMap(c => c.methods).find(m => m.id === method);
   const currentMethodName = currentMethodObj?.name || 'Selecciona un método';
@@ -1461,12 +1562,10 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Specific for Newton-Raphson: Derivada f'(x) calculada automáticamente */}
+              {/* Specific for Newton-Raphson: Derivada f'(x) */}
               {method === 'newton_raphson' && (
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label className="input-label">Derivada analítica f'(x) [Calculada automáticamente]</label>
-                  </div>
+                  <label className="input-label">Derivada analítica f'(x) [Calculada automáticamente]</label>
                   <div className="function-input-wrapper">
                     <span className="function-icon" style={{ color: '#38bdf8' }}>f'(x)=</span>
                     <input
@@ -1576,7 +1675,7 @@ export default function App() {
             </>
           )}
 
-          {/* CASE 2: INTEGRACIÓN NUMÉRICA (Trapecio, Simpson 1/3, Simpson 3/8) */}
+          {/* CASE 2: INTEGRACIÓN NUMÉRICA */}
           {['trapecio', 'simpson_18', 'simpson_38'].includes(method) && (
             <>
               <div>
@@ -1868,7 +1967,7 @@ export default function App() {
             </>
           )}
 
-          {/* CASE 5 & 6: INTERPOLACIÓN Y REGRESIÓN (Con Carga de Archivo y Selector de Columnas - Rúbrica 3) */}
+          {/* CASE 5 & 6: INTERPOLACIÓN Y REGRESIÓN */}
           {(method === 'interp_directa' || method === 'regresion_mc') && (
             <>
               {/* File upload section */}
@@ -1939,7 +2038,7 @@ export default function App() {
                 )}
               </div>
 
-              {/* Selector de Polinomio para Regresión (Rúbrica 2 y 3) */}
+              {/* Selector de Polinomio para Regresión */}
               {method === 'regresion_mc' && (
                 <div className="limits-row">
                   <div>
@@ -2019,7 +2118,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Evaluación en un x dado (Rúbrica 1) */}
+              {/* Evaluación en un x dado */}
               <div>
                 <label className="input-label">Evaluación del modelo / curva ajustada en un valor x dado (x_eval)</label>
                 <input
@@ -2056,7 +2155,7 @@ export default function App() {
               </div>
             </div>
           </div>
-        ) : result ? (
+        ) : (result && result.method === method) ? (
           <div className="result-banner">
             <div>
               <div className="result-title">Resultado — {currentMethodName}</div>
@@ -2064,9 +2163,9 @@ export default function App() {
               {/* Integration */}
               {result.type === 'integration' && (
                 <div>
-                  <div className="result-value">Integral I ≈ {result.integral.toFixed(6)}</div>
+                  <div className="result-value">Integral I ≈ {fmt(result.integral, 6)}</div>
                   <div className="result-subtext">
-                    Evaluada con {result.n} subintervalos (paso h = {result.h.toFixed(6)})
+                    Evaluada con {result.n} subintervalos (paso h = {fmt(result.h, 6)})
                   </div>
                 </div>
               )}
@@ -2074,9 +2173,9 @@ export default function App() {
               {/* Root finding */}
               {result.type === 'root' && (
                 <div>
-                  <div className="result-value">Raíz x* ≈ {result.value.toFixed(6)}</div>
+                  <div className="result-value">Raíz x* ≈ {fmt(result.value, 6)}</div>
                   <div className="result-subtext">
-                    f(x*) = {result.fval.toExponential(4)} en {result.iterationsCount} iteraciones
+                    f(x*) = {fmtExp(result.fval, 4)} en {result.iterationsCount} iteraciones
                   </div>
                 </div>
               )}
@@ -2084,9 +2183,9 @@ export default function App() {
               {/* Golden section univariate */}
               {result.type === 'opti_uni' && (
                 <div>
-                  <div className="result-value">Óptimo x* ≈ {result.value.toFixed(5)}</div>
+                  <div className="result-value">Óptimo x* ≈ {fmt(result.value, 5)}</div>
                   <div className="result-subtext">
-                    Valor óptimo f(x*) = {result.fval.toFixed(5)} ({optiGoal === 'max' ? 'Máximo' : 'Mínimo'} local alcanzado)
+                    Valor óptimo f(x*) = {fmt(result.fval, 5)} ({optiGoal === 'max' ? 'Máximo' : 'Mínimo'} local alcanzado)
                   </div>
                 </div>
               )}
@@ -2095,10 +2194,10 @@ export default function App() {
               {result.type === 'opti_multi' && (
                 <div>
                   <div className="result-value">
-                    Punto óptimo: ({result.optPoint.x.toFixed(4)}, {result.optPoint.y.toFixed(4)})
+                    Punto óptimo: ({fmt(result.optPoint?.x, 4)}, {fmt(result.optPoint?.y, 4)})
                   </div>
                   <div className="result-subtext">
-                    f(x*, y*) = {result.fval.toFixed(5)} en {result.iterationsCount} pasos
+                    f(x*, y*) = {fmt(result.fval, 5)} en {result.iterationsCount} pasos
                   </div>
                 </div>
               )}
@@ -2106,7 +2205,7 @@ export default function App() {
               {/* Direct interpolation */}
               {result.type === 'interpolation' && (
                 <div>
-                  <div className="result-value">p({result.xEval}) = {result.yEstimated.toFixed(5)}</div>
+                  <div className="result-value">p({result.xEval}) = {fmt(result.yEstimated, 5)}</div>
                   <div className="result-subtext" style={{ wordBreak: 'break-all' }}>
                     Polinomio ajustado: <strong>p(x) = {result.polyStr}</strong>
                   </div>
@@ -2120,9 +2219,9 @@ export default function App() {
                     Modelo: {result.modelStr}
                   </div>
                   <div className="result-subtext">
-                    Coeficiente de determinación: <strong>R² = {result.r2.toFixed(4)}</strong> (Ajuste {(result.r2 * 100).toFixed(2)}%)
+                    Coeficiente de determinación: <strong>R² = {fmt(result.r2, 4)}</strong> (Ajuste {fmt((result.r2 || 0) * 100, 2)}%)
                     <br />
-                    Evaluación en x = {result.xEval}: <strong>ŷ({result.xEval}) = {result.yEstimated.toFixed(5)}</strong>
+                    Evaluación en x = {result.xEval}: <strong>ŷ({result.xEval}) = {fmt(result.yEstimated, 5)}</strong>
                   </div>
                 </div>
               )}
@@ -2132,7 +2231,7 @@ export default function App() {
             <div className="stats-badges">
               {result.finalError !== undefined && result.finalError !== null && (
                 <div className="stat-item" style={{ borderColor: 'rgba(244, 63, 94, 0.4)', background: 'rgba(244, 63, 94, 0.1)' }}>
-                  Error Relativo (Ea): <strong style={{ color: '#fb7185' }}>{result.finalError.toFixed(4)}%</strong>
+                  Error Relativo (Ea): <strong style={{ color: '#fb7185' }}>{fmt(result.finalError, 4)}%</strong>
                 </div>
               )}
               {result.n !== undefined && (
@@ -2142,7 +2241,7 @@ export default function App() {
               )}
               {result.h !== undefined && (
                 <div className="stat-item">
-                  Paso h: <strong>{result.h.toFixed(4)}</strong>
+                  Paso h: <strong>{fmt(result.h, 4)}</strong>
                 </div>
               )}
               {result.iterationsCount && (
@@ -2159,8 +2258,8 @@ export default function App() {
           </div>
         ) : null}
 
-        {/* Iterations / Evaluation Points Table (Columnas exactas exigidas por la Rúbrica 1) */}
-        {result?.history && result.history.length > 0 && (
+        {/* Iterations / Evaluation Points Table */}
+        {(result && result.method === method && result.history && result.history.length > 0) && (
           <div className="glass-panel" style={{ padding: '1.25rem' }}>
             <button
               className="table-toggle-btn"
@@ -2253,7 +2352,7 @@ export default function App() {
                         </>
                       )}
 
-                      {/* Sección Áurea multivariada: i, coord activa, punto actual, xl, xu, x1, x2, f(x1), f(x2), error aproximado (%) */}
+                      {/* Sección Áurea multivariada */}
                       {method === 'seccion_dorada_multi' && (
                         <>
                           <th style={{ textAlign: 'center' }}>i</th>
@@ -2299,13 +2398,13 @@ export default function App() {
                         {method === 'biseccion' && (
                           <>
                             <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
-                            <td>{row.xl.toFixed(5)}</td>
-                            <td>{row.xu.toFixed(5)}</td>
-                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.xr.toFixed(6)}</td>
-                            <td>{row.fxl.toFixed(5)}</td>
-                            <td>{row.fxr.toFixed(5)}</td>
-                            <td style={{ color: row.prod < 0 ? '#38bdf8' : '#f43f5e' }}>{row.prod.toExponential(3)}</td>
-                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                            <td>{fmt(row.xl, 5)}</td>
+                            <td>{fmt(row.xu, 5)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{fmt(row.xr, 6)}</td>
+                            <td>{fmt(row.fxl, 5)}</td>
+                            <td>{fmt(row.fxr, 5)}</td>
+                            <td style={{ color: row.prod < 0 ? '#38bdf8' : '#f43f5e' }}>{fmtExp(row.prod, 3)}</td>
+                            <td style={{ color: '#f43f5e' }}>{fmt(row.error)}</td>
                           </>
                         )}
 
@@ -2313,13 +2412,13 @@ export default function App() {
                         {method === 'falsa_posicion' && (
                           <>
                             <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
-                            <td>{row.xl.toFixed(5)}</td>
-                            <td>{row.xu.toFixed(5)}</td>
-                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.xr.toFixed(6)}</td>
-                            <td>{row.fxl.toFixed(5)}</td>
-                            <td>{row.fxu.toFixed(5)}</td>
-                            <td>{row.fxr.toFixed(5)}</td>
-                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                            <td>{fmt(row.xl, 5)}</td>
+                            <td>{fmt(row.xu, 5)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{fmt(row.xr, 6)}</td>
+                            <td>{fmt(row.fxl, 5)}</td>
+                            <td>{fmt(row.fxu, 5)}</td>
+                            <td>{fmt(row.fxr, 5)}</td>
+                            <td style={{ color: '#f43f5e' }}>{fmt(row.error)}</td>
                           </>
                         )}
 
@@ -2327,11 +2426,11 @@ export default function App() {
                         {method === 'newton_raphson' && (
                           <>
                             <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
-                            <td>{row.xi.toFixed(6)}</td>
-                            <td>{row.fxi.toExponential(4)}</td>
-                            <td>{row.dfxi.toFixed(4)}</td>
-                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.xnext.toFixed(6)}</td>
-                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                            <td>{fmt(row.xi, 6)}</td>
+                            <td>{fmtExp(row.fxi, 4)}</td>
+                            <td>{fmt(row.dfxi, 4)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{fmt(row.xnext, 6)}</td>
+                            <td style={{ color: '#f43f5e' }}>{fmt(row.error)}</td>
                           </>
                         )}
 
@@ -2339,12 +2438,12 @@ export default function App() {
                         {method === 'secante' && (
                           <>
                             <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
-                            <td>{row.xprev.toFixed(6)}</td>
-                            <td>{row.xi.toFixed(6)}</td>
-                            <td>{row.fxprev.toFixed(5)}</td>
-                            <td>{row.fxi.toFixed(5)}</td>
-                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.xnext.toFixed(6)}</td>
-                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                            <td>{fmt(row.xprev, 6)}</td>
+                            <td>{fmt(row.xi, 6)}</td>
+                            <td>{fmt(row.fxprev, 5)}</td>
+                            <td>{fmt(row.fxi, 5)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{fmt(row.xnext, 6)}</td>
+                            <td style={{ color: '#f43f5e' }}>{fmt(row.error)}</td>
                           </>
                         )}
 
@@ -2353,9 +2452,9 @@ export default function App() {
                           <>
                             <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
                             <td>{row.n}</td>
-                            <td>{row.h.toFixed(5)}</td>
-                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.integral.toFixed(6)}</td>
-                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                            <td>{fmt(row.h, 5)}</td>
+                            <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{fmt(row.integral, 6)}</td>
+                            <td style={{ color: '#f43f5e' }}>{fmt(row.error)}</td>
                           </>
                         )}
 
@@ -2363,13 +2462,13 @@ export default function App() {
                         {method === 'seccion_dorada_uni' && (
                           <>
                             <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
-                            <td>{row.xl.toFixed(5)}</td>
-                            <td>{row.xu.toFixed(5)}</td>
-                            <td>{row.x1.toFixed(5)}</td>
-                            <td>{row.x2.toFixed(5)}</td>
-                            <td>{row.f1.toFixed(5)}</td>
-                            <td>{row.f2.toFixed(5)}</td>
-                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                            <td>{fmt(row.xl, 5)}</td>
+                            <td>{fmt(row.xu, 5)}</td>
+                            <td>{fmt(row.x1, 5)}</td>
+                            <td>{fmt(row.x2, 5)}</td>
+                            <td>{fmt(row.f1, 5)}</td>
+                            <td>{fmt(row.f2, 5)}</td>
+                            <td style={{ color: '#f43f5e' }}>{fmt(row.error)}</td>
                           </>
                         )}
 
@@ -2379,13 +2478,13 @@ export default function App() {
                             <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>{row.iteration}</td>
                             <td style={{ color: '#38bdf8', fontWeight: 'bold' }}>{row.activeCoord}</td>
                             <td>({row.currX}, {row.currY})</td>
-                            <td>{row.xl.toFixed(4)}</td>
-                            <td>{row.xu.toFixed(4)}</td>
-                            <td>{row.x1.toFixed(4)}</td>
-                            <td>{row.x2.toFixed(4)}</td>
-                            <td>{row.f1.toFixed(4)}</td>
-                            <td>{row.f2.toFixed(4)}</td>
-                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                            <td>{fmt(row.xl, 4)}</td>
+                            <td>{fmt(row.xu, 4)}</td>
+                            <td>{fmt(row.x1, 4)}</td>
+                            <td>{fmt(row.x2, 4)}</td>
+                            <td>{fmt(row.f1, 4)}</td>
+                            <td>{fmt(row.f2, 4)}</td>
+                            <td style={{ color: '#f43f5e' }}>{fmt(row.error)}</td>
                           </>
                         )}
 
@@ -2393,11 +2492,11 @@ export default function App() {
                         {method === 'regresion_mc' && (
                           <>
                             <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>P{row.i}</td>
-                            <td>{row.x}</td>
-                            <td>{row.y}</td>
-                            <td style={{ color: '#38bdf8' }}>{row.yPred}</td>
-                            <td style={{ color: '#f59e0b' }}>{row.residual}</td>
-                            <td style={{ color: '#f43f5e' }}>{row.error}</td>
+                            <td>{fmt(row.x)}</td>
+                            <td>{fmt(row.y)}</td>
+                            <td style={{ color: '#38bdf8' }}>{fmt(row.yPred)}</td>
+                            <td style={{ color: '#f59e0b' }}>{fmt(row.residual)}</td>
+                            <td style={{ color: '#f43f5e' }}>{fmt(row.error)}</td>
                           </>
                         )}
 
@@ -2405,9 +2504,9 @@ export default function App() {
                         {method === 'interp_directa' && (
                           <>
                             <td style={{ textAlign: 'center', color: '#c084fc', fontWeight: 'bold' }}>P{row.i}</td>
-                            <td>{row.x}</td>
-                            <td>{row.y}</td>
-                            <td style={{ color: '#38bdf8' }}>{row.pVal}</td>
+                            <td>{fmt(row.x)}</td>
+                            <td>{fmt(row.y)}</td>
+                            <td style={{ color: '#38bdf8' }}>{fmt(row.pVal)}</td>
                           </>
                         )}
                       </tr>
@@ -2427,5 +2526,13 @@ export default function App() {
 
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <MainApp />
+    </ErrorBoundary>
   );
 }
