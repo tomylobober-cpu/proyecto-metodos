@@ -318,6 +318,7 @@ function MainApp() {
       setFuncStr('sin(x)');
       setLimitA(0);
       setLimitB(3.141592653589793);
+      setStopCondition('iterations');
       setIntegN(6);
     } else if (mId === 'regresion_mc') {
       setPoints([
@@ -546,28 +547,168 @@ function MainApp() {
     if (integInputType === 'function') {
       a = parseFloat(limitA);
       b = parseFloat(limitB);
-      n = parseInt(integN, 10);
 
       if (isNaN(a) || isNaN(b)) throw new Error('Los límites a y b deben ser números válidos.');
       if (a >= b) throw new Error('El límite inferior a debe ser estrictamente menor que el límite superior b.');
-      if (n < 1) throw new Error('El número de subintervalos n debe ser al menos 1.');
-
-      if (method === 'simpson_18' && n % 2 !== 0) {
-        throw new Error(`Simpson 1/3 exige que el número de subintervalos n sea PAR. Valor actual: ${n}`);
-      }
-      if (method === 'simpson_38' && n % 3 !== 0) {
-        throw new Error(`Simpson 3/8 exige que el número de subintervalos n sea MÚLTIPLO DE 3. Valor actual: ${n}`);
-      }
 
       parsedExpr = math.compile(funcStr);
-      const h = (b - a) / n;
-      for (let i = 0; i <= n; i++) {
-        const xi = a + i * h;
-        const yi = evaluateF(parsedExpr, { x: xi });
-        if (isNaN(yi) || !isFinite(yi)) throw new Error(`Función indefinida o diverge en x = ${xi.toFixed(4)}`);
-        xs.push(xi);
-        ys.push(yi);
+
+      const computeComposite = (subN) => {
+        const stepH = (b - a) / subN;
+        const evalXs = [];
+        const evalYs = [];
+        for (let i = 0; i <= subN; i++) {
+          const xi = a + i * stepH;
+          const yi = evaluateF(parsedExpr, { x: xi });
+          if (isNaN(yi) || !isFinite(yi)) {
+            throw new Error(`Función indefinida o diverge en x = ${xi.toFixed(4)}`);
+          }
+          evalXs.push(xi);
+          evalYs.push(yi);
+        }
+
+        if (method === 'trapecio') {
+          let sumInternal = 0;
+          for (let i = 1; i < subN; i++) sumInternal += evalYs[i];
+          return {
+            integral: (stepH / 2) * (evalYs[0] + 2 * sumInternal + evalYs[subN]),
+            h: stepH,
+            xs: evalXs,
+            ys: evalYs
+          };
+        } else if (method === 'simpson_18') {
+          let sumOdd = 0, sumEven = 0;
+          for (let i = 1; i < subN; i++) {
+            if (i % 2 !== 0) sumOdd += evalYs[i];
+            else sumEven += evalYs[i];
+          }
+          return {
+            integral: (stepH / 3) * (evalYs[0] + 4 * sumOdd + 2 * sumEven + evalYs[subN]),
+            h: stepH,
+            xs: evalXs,
+            ys: evalYs
+          };
+        } else if (method === 'simpson_38') {
+          let sum3k = 0, sumOther = 0;
+          for (let i = 1; i < subN; i++) {
+            if (i % 3 === 0) sum3k += evalYs[i];
+            else sumOther += evalYs[i];
+          }
+          return {
+            integral: ((3 * stepH) / 8) * (evalYs[0] + 3 * sumOther + 2 * sum3k + evalYs[subN]),
+            h: stepH,
+            xs: evalXs,
+            ys: evalYs
+          };
+        }
+        return { integral: 0, h: stepH, xs: evalXs, ys: evalYs };
+      };
+
+      const history = [];
+      let finalRes = null;
+
+      if (stopCondition === 'iterations') {
+        const targetN = parseInt(integN, 10);
+        if (isNaN(targetN) || targetN < 1) throw new Error('El número de subintervalos n debe ser al menos 1.');
+
+        if (method === 'simpson_18' && targetN % 2 !== 0) {
+          throw new Error(`Simpson 1/3 exige que el número de subintervalos n sea PAR. Valor actual: ${targetN}`);
+        }
+        if (method === 'simpson_38' && targetN % 3 !== 0) {
+          throw new Error(`Simpson 3/8 exige que el número de subintervalos n sea MÚLTIPLO DE 3. Valor actual: ${targetN}`);
+        }
+
+        const stepBase = method === 'simpson_38' ? 3 : method === 'simpson_18' ? 2 : 1;
+        const subNList = [];
+        for (let k = stepBase; k <= targetN; k += stepBase) {
+          subNList.push(k);
+        }
+        if (subNList.length === 0 || subNList[subNList.length - 1] !== targetN) {
+          subNList.push(targetN);
+        }
+
+        let prevInt = null;
+        subNList.forEach((k, idx) => {
+          const comp = computeComposite(k);
+          const err = prevInt !== null ? Math.abs((comp.integral - prevInt) / (comp.integral === 0 ? 1 : comp.integral)) * 100 : null;
+          history.push({
+            iteration: idx + 1,
+            n: k,
+            h: comp.h,
+            integral: comp.integral,
+            error: err !== null ? err.toFixed(6) + '%' : '-',
+            errorVal: err
+          });
+          prevInt = comp.integral;
+          finalRes = comp;
+        });
+      } else {
+        // Criterio de parada: cifras significativas (Scarborough) o tolerancia
+        let targetTol = 1e-6;
+        if (stopCondition === 'sig_figs') {
+          targetTol = scarboroughTol;
+        } else if (stopCondition === 'tolerance') {
+          targetTol = parseFloat(tolerance);
+        }
+
+        let currentN = method === 'simpson_38' ? 3 : method === 'simpson_18' ? 2 : 1;
+        let prevInt = null;
+        const maxIters = 16;
+
+        for (let iter = 1; iter <= maxIters; iter++) {
+          const comp = computeComposite(currentN);
+          const err = prevInt !== null ? Math.abs((comp.integral - prevInt) / (comp.integral === 0 ? 1 : comp.integral)) * 100 : null;
+
+          history.push({
+            iteration: iter,
+            n: currentN,
+            h: comp.h,
+            integral: comp.integral,
+            error: err !== null ? err.toFixed(6) + '%' : '-',
+            errorVal: err
+          });
+
+          finalRes = comp;
+
+          if (iter > 1 && err !== null && err < targetTol) {
+            break;
+          }
+
+          prevInt = comp.integral;
+          // Refinar subintervalos
+          if (method === 'simpson_38') {
+            currentN = currentN * 2; // 3, 6, 12, 24, 48...
+          } else if (method === 'simpson_18') {
+            currentN = currentN * 2; // 2, 4, 8, 16, 32...
+          } else {
+            currentN = currentN * 2; // 1, 2, 4, 8, 16...
+          }
+          if (currentN > 4096) break;
+        }
       }
+
+      n = finalRes.xs.length - 1;
+      xs = finalRes.xs;
+      ys = finalRes.ys;
+
+      const lastErr = history[history.length - 1]?.errorVal || null;
+
+      setResult({
+        method,
+        type: 'integration',
+        integral: finalRes.integral,
+        h: finalRes.h,
+        n,
+        a,
+        b,
+        finalError: lastErr,
+        history,
+        errorHistory: history.filter(h => h.errorVal !== null),
+        parsedExpr,
+        points: xs.map((x, idx) => ({ x, y: ys[idx] })),
+        aRange: a,
+        bRange: b
+      });
     } else {
       const sorted = [...integPoints].sort((p1, p2) => p1.x - p2.x);
       xs = sorted.map(p => Number(p.x));
@@ -592,96 +733,60 @@ function MainApp() {
       if (method === 'simpson_38' && n % 3 !== 0) {
         throw new Error(`Simpson 3/8 exige que n sea múltiplo de 3. Actualmente n = ${n}`);
       }
-    }
 
-    const computeIntegral = (evalXs, evalYs, subN) => {
-      const stepH = (evalXs[evalXs.length - 1] - evalXs[0]) / subN;
-      if (method === 'trapecio') {
-        let sumInternal = 0;
-        for (let i = 1; i < subN; i++) sumInternal += evalYs[i];
-        return (stepH / 2) * (evalYs[0] + 2 * sumInternal + evalYs[subN]);
-      } else if (method === 'simpson_18') {
-        let sumOdd = 0, sumEven = 0;
-        for (let i = 1; i < subN; i++) {
-          if (i % 2 !== 0) sumOdd += evalYs[i];
-          else sumEven += evalYs[i];
+      const computeIntegral = (evalXs, evalYs, subN) => {
+        const stepH = (evalXs[evalXs.length - 1] - evalXs[0]) / subN;
+        if (method === 'trapecio') {
+          let sumInternal = 0;
+          for (let i = 1; i < subN; i++) sumInternal += evalYs[i];
+          return (stepH / 2) * (evalYs[0] + 2 * sumInternal + evalYs[subN]);
+        } else if (method === 'simpson_18') {
+          let sumOdd = 0, sumEven = 0;
+          for (let i = 1; i < subN; i++) {
+            if (i % 2 !== 0) sumOdd += evalYs[i];
+            else sumEven += evalYs[i];
+          }
+          return (stepH / 3) * (evalYs[0] + 4 * sumOdd + 2 * sumEven + evalYs[subN]);
+        } else if (method === 'simpson_38') {
+          let sum3k = 0, sumOther = 0;
+          for (let i = 1; i < subN; i++) {
+            if (i % 3 === 0) sum3k += evalYs[i];
+            else sumOther += evalYs[i];
+          }
+          return ((3 * stepH) / 8) * (evalYs[0] + 3 * sumOther + 2 * sum3k + evalYs[subN]);
         }
-        return (stepH / 3) * (evalYs[0] + 4 * sumOdd + 2 * sumEven + evalYs[subN]);
-      } else if (method === 'simpson_38') {
-        let sum3k = 0, sumOther = 0;
-        for (let i = 1; i < subN; i++) {
-          if (i % 3 === 0) sum3k += evalYs[i];
-          else sumOther += evalYs[i];
-        }
-        return ((3 * stepH) / 8) * (evalYs[0] + 3 * sumOther + 2 * sum3k + evalYs[subN]);
-      }
-      return 0;
-    };
+        return 0;
+      };
 
-    const finalIntegral = computeIntegral(xs, ys, n);
-    const finalH = (b - a) / n;
+      const finalIntegral = computeIntegral(xs, ys, n);
+      const finalH = (b - a) / n;
 
-    const history = [];
-    if (parsedExpr) {
-      let stepSize = method === 'simpson_38' ? 3 : method === 'simpson_18' ? 2 : 1;
-      const subNList = [];
-      for (let k = stepSize; k <= n; k += stepSize) {
-        subNList.push(k);
-      }
-      if (subNList.length === 0 || subNList[subNList.length - 1] !== n) {
-        subNList.push(n);
-      }
-
-      let prevInt = null;
-      subNList.forEach((k, idx) => {
-        const hk = (b - a) / k;
-        const subXs = [], subYs = [];
-        for (let j = 0; j <= k; j++) {
-          const xj = a + j * hk;
-          subXs.push(xj);
-          subYs.push(evaluateF(parsedExpr, { x: xj }));
-        }
-        const ik = computeIntegral(subXs, subYs, k);
-        const err = prevInt !== null ? Math.abs((ik - prevInt) / (ik === 0 ? 1 : ik)) * 100 : null;
-        history.push({
-          iteration: idx + 1,
-          n: k,
-          h: hk,
-          integral: ik,
-          error: err !== null ? err.toFixed(6) + '%' : '-',
-          errorVal: err
-        });
-        prevInt = ik;
-      });
-    } else {
-      history.push({
+      const history = [{
         iteration: 1,
         n,
         h: finalH,
         integral: finalIntegral,
         error: '-',
         errorVal: null
+      }];
+
+      setResult({
+        method,
+        type: 'integration',
+        integral: finalIntegral,
+        h: finalH,
+        n,
+        a,
+        b,
+        finalError: null,
+        history,
+        errorHistory: [],
+        parsedExpr: null,
+        points: xs.map((x, idx) => ({ x, y: ys[idx] })),
+        aRange: a,
+        bRange: b
       });
     }
-
-    const lastErr = history[history.length - 1]?.errorVal || null;
-
-    setResult({
-      method,
-      type: 'integration',
-      integral: finalIntegral,
-      h: finalH,
-      n,
-      a,
-      b,
-      finalError: lastErr,
-      history,
-      errorHistory: history.filter(h => h.errorVal !== null),
-      parsedExpr,
-      points: xs.map((x, idx) => ({ x, y: ys[idx] })),
-      aRange: a,
-      bRange: b
-    });
   };
 
   // 3. Sección Áurea Univariada
@@ -790,9 +895,10 @@ function MainApp() {
     }
 
     const history = [];
+    const trajectory = [{ x: currX, y: currY, step: 0, label: 'Inicio' }];
     let stepCount = 0;
-    let prevVal = evaluateF(parsedExpr, { x: currX, y: currY });
-    let ea = 100;
+    let prevPoint = { x: currX, y: currY };
+    let ea = null;
 
     for (let c = 1; c <= maxCycles; c++) {
       // Opt along X
@@ -815,9 +921,18 @@ function MainApp() {
       }
       currX = (optiGoal === 'max' ? f1 > f2 : f1 < f2) ? x1 : x2;
       stepCount++;
-      let currentValX = evaluateF(parsedExpr, { x: currX, y: currY });
-      let eaX = Math.abs((currentValX - prevVal) / (currentValX === 0 ? 1 : currentValX)) * 100;
-      prevVal = currentValX;
+
+      // Error relativo basado en el cambio de posición del punto (x, y)
+      const dxX = currX - prevPoint.x;
+      const dyX = currY - prevPoint.y;
+      const distStepX = Math.sqrt(dxX * dxX + dyX * dyX);
+      const normPointX = Math.sqrt(currX * currX + currY * currY);
+      let eaX = null;
+      if (stepCount > 1) {
+        eaX = normPointX > 1e-5 ? (distStepX / normPointX) * 100 : distStepX * 100;
+      }
+      prevPoint = { x: currX, y: currY };
+      trajectory.push({ x: currX, y: currY, step: stepCount, activeCoord: 'X' });
 
       history.push({
         iteration: stepCount,
@@ -854,10 +969,16 @@ function MainApp() {
       }
       currY = (optiGoal === 'max' ? f1 > f2 : f1 < f2) ? y1 : y2;
       stepCount++;
-      let currentValY = evaluateF(parsedExpr, { x: currX, y: currY });
-      let eaY = Math.abs((currentValY - prevVal) / (currentValY === 0 ? 1 : currentValY)) * 100;
-      prevVal = currentValY;
+
+      // Error relativo basado en el cambio de posición del punto (x, y)
+      const dxY = currX - prevPoint.x;
+      const dyY = currY - prevPoint.y;
+      const distStepY = Math.sqrt(dxY * dxY + dyY * dyY);
+      const normPointY = Math.sqrt(currX * currX + currY * currY);
+      const eaY = normPointY > 1e-5 ? (distStepY / normPointY) * 100 : distStepY * 100;
+      prevPoint = { x: currX, y: currY };
       ea = eaY;
+      trajectory.push({ x: currX, y: currY, step: stepCount, activeCoord: 'Y' });
 
       history.push({
         iteration: stepCount,
@@ -885,7 +1006,11 @@ function MainApp() {
       iterationsCount: history.length,
       finalError: ea,
       history,
-      parsedExpr
+      errorHistory: history.filter(h => h.errorVal !== null),
+      parsedExpr,
+      trajectory,
+      multiLimX,
+      multiLimY
     });
   };
 
@@ -1105,10 +1230,13 @@ function MainApp() {
       setStopCondition('sig_figs');
       setSigFigs(4);
     } else if (['trapecio', 'simpson_18', 'simpson_38'].includes(methodId)) {
+      setIntegInputType('function');
       setFuncStr('sin(x)');
       setLimitA(0);
       setLimitB(3.141592653589793);
+      setStopCondition('iterations');
       setIntegN(6);
+      setSigFigs(4);
     } else if (methodId === 'seccion_dorada_uni') {
       setFuncStr('2*sin(x) - x^2/10');
       setLimitA(0);
@@ -1145,36 +1273,240 @@ function MainApp() {
     }
   };
 
-  // Draw Function / Curve Chart
+  // Draw Function / Curve Chart with Labeled Axes, Numeric Ticks, and Legend
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const width = (canvas.width = canvas.parentElement.clientWidth || 400);
-    const height = (canvas.height = canvas.parentElement.clientHeight || 280);
+    const width = (canvas.width = canvas.parentElement.clientWidth || 600);
+    const height = (canvas.height = canvas.parentElement.clientHeight || 320);
 
     ctx.clearRect(0, 0, width, height);
 
     if (!result || result.method !== method) return;
 
+    const padLeft = 68;
+    const padRight = 24;
+    const padTop = 38;
+    const padBottom = 42;
+    const plotW = width - padLeft - padRight;
+    const plotH = height - padTop - padBottom;
+    if (plotW < 50 || plotH < 50) return;
+
+    // --- CASE A: 2D MULTIVARIABLE OPTIMIZATION MAP ---
+    if (method === 'seccion_dorada_multi') {
+      const xMin = multiLimX[0];
+      const xMax = multiLimX[1];
+      const yMin = multiLimY[0];
+      const yMax = multiLimY[1];
+
+      const toX = (x) => padLeft + ((x - xMin) / (xMax - xMin)) * plotW;
+      const toY = (y) => padTop + plotH - ((y - yMin) / (yMax - yMin)) * plotH;
+
+      // 1. Grid & Ticks for X
+      const xTickCount = 6;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+      ctx.font = '10px JetBrains Mono, monospace';
+      ctx.textAlign = 'center';
+      for (let i = 0; i <= xTickCount; i++) {
+        const valX = xMin + (i / xTickCount) * (xMax - xMin);
+        const px = toX(valX);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(px, padTop);
+        ctx.lineTo(px, padTop + plotH);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.beginPath();
+        ctx.moveTo(px, padTop + plotH);
+        ctx.lineTo(px, padTop + plotH + 5);
+        ctx.stroke();
+
+        ctx.fillText(valX.toFixed(1), px, padTop + plotH + 18);
+      }
+
+      // 2. Grid & Ticks for Y
+      const yTickCount = 5;
+      ctx.textAlign = 'right';
+      for (let i = 0; i <= yTickCount; i++) {
+        const valY = yMin + (i / yTickCount) * (yMax - yMin);
+        const py = toY(valY);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padLeft, py);
+        ctx.lineTo(padLeft + plotW, py);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.beginPath();
+        ctx.moveTo(padLeft - 5, py);
+        ctx.lineTo(padLeft, py);
+        ctx.stroke();
+
+        ctx.fillText(valY.toFixed(1), padLeft - 8, py + 3.5);
+      }
+
+      // 3. Axes x=0 and y=0
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.lineWidth = 1.5;
+      if (0 >= yMin && 0 <= yMax) {
+        const y0 = toY(0);
+        ctx.beginPath();
+        ctx.moveTo(padLeft, y0);
+        ctx.lineTo(padLeft + plotW, y0);
+        ctx.stroke();
+      }
+      if (0 >= xMin && 0 <= xMax) {
+        const x0 = toX(0);
+        ctx.beginPath();
+        ctx.moveTo(x0, padTop);
+        ctx.lineTo(x0, padTop + plotH);
+        ctx.stroke();
+      }
+
+      // 4. Plot Frame
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(padLeft, padTop, plotW, plotH);
+
+      // 5. Axis Labels
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '11px Plus Jakarta Sans, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Eje X — Coordenada x', padLeft + plotW / 2, height - 10);
+      ctx.textAlign = 'left';
+      ctx.fillText('Eje Y — Coordenada y', padLeft, 22);
+
+      // 6. 2D Contour lines
+      const optX = result.optPoint?.x ?? 1;
+      const optY = result.optPoint?.y ?? -2;
+      for (let r = 1; r <= 6; r++) {
+        const rx = (r / 6) * ((xMax - xMin) / 2.2);
+        const ry = (r / 6) * ((yMax - yMin) / 2.2);
+        ctx.beginPath();
+        ctx.ellipse(toX(optX), toY(optY), Math.abs(toX(optX + rx) - toX(optX)), Math.abs(toY(optY + ry) - toY(optY)), 0, 0, 2 * Math.PI);
+        ctx.strokeStyle = 'rgba(192, 132, 252, 0.22)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // 7. Trajectory of Optimization
+      const traj = result?.trajectory || [];
+      if (traj.length > 1) {
+        ctx.beginPath();
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2;
+        traj.forEach((pt, idx) => {
+          const px = toX(pt.x);
+          const py = toY(pt.y);
+          if (idx === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+
+        traj.forEach((pt, idx) => {
+          if (idx > 0 && idx < traj.length - 1) {
+            const px = toX(pt.x);
+            const py = toY(pt.y);
+            ctx.beginPath();
+            ctx.arc(px, py, 3.5, 0, 2 * Math.PI);
+            ctx.fillStyle = '#38bdf8';
+            ctx.fill();
+          }
+        });
+      }
+
+      // Start point
+      const startX = parseFloat(multiX0);
+      const startY = parseFloat(multiY0);
+      ctx.beginPath();
+      ctx.arc(toX(startX), toY(startY), 6, 0, 2 * Math.PI);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Optimum point
+      if (result.optPoint) {
+        const ox = toX(result.optPoint.x);
+        const oy = toY(result.optPoint.y);
+        ctx.beginPath();
+        ctx.arc(ox, oy, 7, 0, 2 * Math.PI);
+        ctx.fillStyle = '#22c55e';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      // 8. Legend for 2D
+      ctx.textAlign = 'right';
+      ctx.font = '10px Plus Jakarta Sans, sans-serif';
+      const legendX = padLeft + plotW - 8;
+      const legendY = 22;
+
+      ctx.fillStyle = '#22c55e';
+      ctx.beginPath();
+      ctx.arc(legendX - 5, legendY - 3, 4.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText('Óptimo (x*, y*)', legendX - 15, legendY);
+
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(legendX - 110, legendY - 3);
+      ctx.lineTo(legendX - 90, legendY - 3);
+      ctx.stroke();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText('Trayectoria', legendX - 118, legendY);
+
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.arc(legendX - 200, legendY - 3, 4.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText('Inicio (x₀, y₀)', legendX - 210, legendY);
+      return;
+    }
+
+    // --- CASE B: 1D METHODS (RAÍCES, INTEGRACIÓN, UNIVARIADA, INTERPOLACIÓN, REGRESIÓN) ---
     let parsedExpr = result?.parsedExpr;
     if (!parsedExpr && ['biseccion', 'falsa_posicion', 'secante', 'newton_raphson', 'seccion_dorada_uni', 'trapecio', 'simpson_18', 'simpson_38'].includes(method)) {
       try { parsedExpr = math.compile(funcStr); } catch {}
     }
 
-    if (!parsedExpr && method !== 'seccion_dorada_multi' && !result?.points) return;
+    if (!parsedExpr && !result?.points) return;
 
     let xMin = -2, xMax = 5;
     if (result?.points && result.points.length > 0) {
       const xs = result.points.map(p => p.x);
-      xMin = Math.min(...xs) - 0.5;
-      xMax = Math.max(...xs) + 0.5;
+      const minXVal = Math.min(...xs);
+      const maxXVal = Math.max(...xs);
+      const span = Math.max(maxXVal - minXVal, 1);
+      xMin = minXVal - span * 0.15;
+      xMax = maxXVal + span * 0.15;
     } else if (result?.aRange !== undefined && result?.bRange !== undefined) {
-      xMin = Math.min(result.aRange, result.bRange) - 1;
-      xMax = Math.max(result.aRange, result.bRange) + 1;
+      const minRange = Math.min(result.aRange, result.bRange);
+      const maxRange = Math.max(result.aRange, result.bRange);
+      const span = Math.max(maxRange - minRange, 1);
+      xMin = minRange - span * 0.2;
+      xMax = maxRange + span * 0.2;
+    } else if (['trapecio', 'simpson_18', 'simpson_38'].includes(method)) {
+      const a = parseFloat(limitA) || 0;
+      const b = parseFloat(limitB) || 3.1416;
+      const span = Math.max(b - a, 1);
+      xMin = a - span * 0.15;
+      xMax = b + span * 0.15;
     }
 
-    const samples = 220;
+    const samples = 240;
     const pts = [];
     let minY = Infinity, maxY = -Infinity;
 
@@ -1204,42 +1536,124 @@ function MainApp() {
     const yStart = minY - ySpan * 0.15;
     const yEnd = maxY + ySpan * 0.15;
 
-    const toX = (x) => ((x - xMin) / (xMax - xMin)) * width;
-    const toY = (y) => height - ((y - yStart) / (yEnd - yStart)) * height;
+    const toX = (x) => padLeft + ((x - xMin) / (xMax - xMin)) * plotW;
+    const toY = (y) => padTop + plotH - ((y - yStart) / (yEnd - yStart)) * plotH;
 
-    // Grid
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 8; i++) {
+    // 1. Grid & Ticks for X
+    const xTickCount = 6;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+    ctx.font = '10px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    for (let i = 0; i <= xTickCount; i++) {
+      const valX = xMin + (i / xTickCount) * (xMax - xMin);
+      const px = toX(valX);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo((i / 8) * width, 0);
-      ctx.lineTo((i / 8) * width, height);
+      ctx.moveTo(px, padTop);
+      ctx.lineTo(px, padTop + plotH);
       ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
       ctx.beginPath();
-      ctx.moveTo(0, (i / 8) * height);
-      ctx.lineTo(width, (i / 8) * height);
+      ctx.moveTo(px, padTop + plotH);
+      ctx.lineTo(px, padTop + plotH + 5);
       ctx.stroke();
+
+      ctx.fillText(valX.toFixed(Math.abs(valX) >= 10 ? 1 : 2), px, padTop + plotH + 18);
     }
 
-    // Axes
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    // 2. Grid & Ticks for Y
+    const yTickCount = 5;
+    ctx.textAlign = 'right';
+    for (let i = 0; i <= yTickCount; i++) {
+      const valY = yStart + (i / yTickCount) * (yEnd - yStart);
+      const py = toY(valY);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padLeft, py);
+      ctx.lineTo(padLeft + plotW, py);
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.beginPath();
+      ctx.moveTo(padLeft - 5, py);
+      ctx.lineTo(padLeft, py);
+      ctx.stroke();
+
+      ctx.fillText(valY.toFixed(Math.abs(valY) >= 10 ? 1 : 2), padLeft - 8, py + 3.5);
+    }
+
+    // 3. Axes at x=0 and y=0
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
     ctx.lineWidth = 1.5;
     if (0 >= yStart && 0 <= yEnd) {
       const y0 = toY(0);
       ctx.beginPath();
-      ctx.moveTo(0, y0);
-      ctx.lineTo(width, y0);
+      ctx.moveTo(padLeft, y0);
+      ctx.lineTo(padLeft + plotW, y0);
       ctx.stroke();
     }
     if (0 >= xMin && 0 <= xMax) {
       const x0 = toX(0);
       ctx.beginPath();
-      ctx.moveTo(x0, 0);
-      ctx.lineTo(x0, height);
+      ctx.moveTo(x0, padTop);
+      ctx.lineTo(x0, padTop + plotH);
       ctx.stroke();
     }
 
-    // Draw Function Curve
+    // 4. Plot Frame
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(padLeft, padTop, plotW, plotH);
+
+    // 5. Axis Labels
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '11px Plus Jakarta Sans, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Eje X — Variable independiente (x)', padLeft + plotW / 2, height - 10);
+    ctx.textAlign = 'left';
+    ctx.fillText('Eje Y — f(x) / Valores observados', padLeft, 22);
+
+    // 6. Shaded Area for Integration
+    if (['trapecio', 'simpson_18', 'simpson_38'].includes(method) && result?.a !== undefined && result?.b !== undefined && parsedExpr) {
+      const a = result.a;
+      const b = result.b;
+      const subSamples = 100;
+      const areaPts = [];
+      for (let i = 0; i <= subSamples; i++) {
+        const x = a + (i / subSamples) * (b - a);
+        const y = evaluateF(parsedExpr, { x, e: Math.E, pi: Math.PI });
+        if (!isNaN(y) && isFinite(y)) {
+          areaPts.push({ x, y });
+        }
+      }
+      if (areaPts.length > 1) {
+        const y0 = 0 >= yStart && 0 <= yEnd ? toY(0) : toY(yStart);
+        ctx.beginPath();
+        ctx.moveTo(toX(areaPts[0].x), y0);
+        areaPts.forEach(pt => ctx.lineTo(toX(pt.x), toY(pt.y)));
+        ctx.lineTo(toX(areaPts[areaPts.length - 1].x), y0);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(192, 132, 252, 0.2)';
+        ctx.fill();
+
+        // Dashed lines at a and b
+        ctx.strokeStyle = '#c084fc';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(toX(a), y0);
+        ctx.lineTo(toX(a), toY(evaluateF(parsedExpr, { x: a })));
+        ctx.moveTo(toX(b), y0);
+        ctx.lineTo(toX(b), toY(evaluateF(parsedExpr, { x: b })));
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // 7. Draw Function Curve
     if (pts.length > 1) {
       ctx.beginPath();
       ctx.strokeStyle = '#c084fc';
@@ -1253,7 +1667,7 @@ function MainApp() {
       ctx.stroke();
     }
 
-    // Plot observed data points
+    // 8. Plot observed data points
     if (result?.points) {
       for (const p of result.points) {
         const px = toX(p.x);
@@ -1268,12 +1682,12 @@ function MainApp() {
       }
     }
 
-    // Plot root or optimum point
+    // 9. Plot Root or Optimum Marker
     if (result?.type === 'root' && result?.value !== undefined) {
       const rx = toX(result.value);
       const ry = toY(result.fval || 0);
       ctx.beginPath();
-      ctx.arc(rx, ry, 6, 0, 2 * Math.PI);
+      ctx.arc(rx, ry, 6.5, 0, 2 * Math.PI);
       ctx.fillStyle = '#22c55e';
       ctx.fill();
       ctx.strokeStyle = '#ffffff';
@@ -1283,7 +1697,7 @@ function MainApp() {
       const ox = toX(result.value);
       const oy = toY(result.fval || 0);
       ctx.beginPath();
-      ctx.arc(ox, oy, 6, 0, 2 * Math.PI);
+      ctx.arc(ox, oy, 6.5, 0, 2 * Math.PI);
       ctx.fillStyle = '#f59e0b';
       ctx.fill();
       ctx.strokeStyle = '#ffffff';
@@ -1293,14 +1707,93 @@ function MainApp() {
       const ex = toX(result.xEval);
       const ey = toY(result.yEstimated);
       ctx.beginPath();
-      ctx.arc(ex, ey, 6, 0, 2 * Math.PI);
+      ctx.arc(ex, ey, 6.5, 0, 2 * Math.PI);
       ctx.fillStyle = '#ec4899';
       ctx.fill();
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-  }, [result, funcStr, method]);
+
+    // 10. Canvas Legend
+    ctx.textAlign = 'right';
+    ctx.font = '10px Plus Jakarta Sans, sans-serif';
+    const legendX = padLeft + plotW - 8;
+    const legendY = 22;
+
+    if (result?.type === 'root' && result?.value !== undefined) {
+      ctx.fillStyle = '#22c55e';
+      ctx.beginPath();
+      ctx.arc(legendX - 5, legendY - 3, 4.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText(`Raíz x* ≈ ${fmt(result.value, 4)}`, legendX - 15, legendY);
+
+      ctx.strokeStyle = '#c084fc';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(legendX - 165, legendY - 3);
+      ctx.lineTo(legendX - 145, legendY - 3);
+      ctx.stroke();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText('f(x)', legendX - 175, legendY);
+    } else if (result?.type === 'integration') {
+      ctx.fillStyle = 'rgba(192, 132, 252, 0.4)';
+      ctx.fillRect(legendX - 20, legendY - 9, 14, 12);
+      ctx.strokeStyle = '#c084fc';
+      ctx.strokeRect(legendX - 20, legendY - 9, 14, 12);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText(`Área I ≈ ${fmt(result.integral, 4)}`, legendX - 28, legendY);
+
+      ctx.strokeStyle = '#c084fc';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(legendX - 165, legendY - 3);
+      ctx.lineTo(legendX - 145, legendY - 3);
+      ctx.stroke();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText('f(x)', legendX - 175, legendY);
+    } else if (result?.type === 'opti_uni') {
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.arc(legendX - 5, legendY - 3, 4.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText(`Óptimo x* ≈ ${fmt(result.value, 4)}`, legendX - 15, legendY);
+
+      ctx.strokeStyle = '#c084fc';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(legendX - 165, legendY - 3);
+      ctx.lineTo(legendX - 145, legendY - 3);
+      ctx.stroke();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText('f(x)', legendX - 175, legendY);
+    } else if (result?.type === 'interpolation' || result?.type === 'regression') {
+      ctx.fillStyle = '#ec4899';
+      ctx.beginPath();
+      ctx.arc(legendX - 5, legendY - 3, 4.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText(`Evaluación x=${result.xEval}`, legendX - 15, legendY);
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.beginPath();
+      ctx.arc(legendX - 150, legendY - 3, 4, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText('Puntos (x, y)', legendX - 162, legendY);
+
+      ctx.strokeStyle = '#c084fc';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(legendX - 250, legendY - 3);
+      ctx.lineTo(legendX - 230, legendY - 3);
+      ctx.stroke();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText('Curva', legendX - 260, legendY);
+    }
+  }, [result, funcStr, method, multiLimX, multiLimY, multiX0, multiY0]);
 
   // Draw Error Convergence Chart
   useEffect(() => {
@@ -1725,38 +2218,95 @@ function MainApp() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="input-label">
-                      Número de subintervalos n {method === 'simpson_18' ? '(Exige n PAR)' : method === 'simpson_38' ? '(Exige n MÚLTIPLO DE 3)' : '(Cualquier entero ≥ 1)'}
-                    </label>
-                    <div className="stepper-input-group">
-                      <button 
-                        type="button" 
-                        className="stepper-btn" 
-                        onClick={() => {
-                          const step = method === 'simpson_38' ? 3 : method === 'simpson_18' ? 2 : 1;
-                          setIntegN(prev => Math.max(step, Number(prev) - step));
-                        }}
-                      >
-                        <ChevronDown size={18} />
-                      </button>
-                      <input 
-                        type="number" 
-                        min="1" 
-                        className="stepper-input" 
-                        value={integN} 
-                        onChange={e => setIntegN(parseInt(e.target.value, 10) || 1)} 
-                      />
-                      <button 
-                        type="button" 
-                        className="stepper-btn" 
-                        onClick={() => {
-                          const step = method === 'simpson_38' ? 3 : method === 'simpson_18' ? 2 : 1;
-                          setIntegN(prev => Number(prev) + step);
-                        }}
-                      >
-                        <ChevronUp size={18} />
-                      </button>
+                  {/* Selector claro de criterio de parada para integración (Rúbrica 3) */}
+                  <div className="switch-params-row">
+                    <div>
+                      <label className="input-label">Criterio de parada</label>
+                      <div className="mode-toggle-box">
+                        <button 
+                          type="button" 
+                          className={`mode-option-btn ${stopCondition === 'sig_figs' ? 'active' : ''}`} 
+                          onClick={() => setStopCondition('sig_figs')}
+                        >
+                          Cifras significativas
+                        </button>
+                        <button 
+                          type="button" 
+                          className={`mode-option-btn ${stopCondition === 'iterations' ? 'active' : ''}`} 
+                          onClick={() => setStopCondition('iterations')}
+                        >
+                          N° de Subintervalos (n)
+                        </button>
+                        <button 
+                          type="button" 
+                          className={`mode-option-btn ${stopCondition === 'tolerance' ? 'active' : ''}`} 
+                          onClick={() => setStopCondition('tolerance')}
+                        >
+                          Tolerancia (ε)
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="input-label">
+                        {stopCondition === 'sig_figs' ? 'Cifras significativas (m)' : stopCondition === 'iterations' ? (
+                          `Subintervalos n ${method === 'simpson_18' ? '(Exige par)' : method === 'simpson_38' ? '(Múltiplo de 3)' : '(Entero ≥ 1)'}`
+                        ) : 'Tolerancia deseada (ε %)'}
+                      </label>
+                      <div className="stepper-input-group">
+                        {stopCondition === 'sig_figs' ? (
+                          <input 
+                            type="number" 
+                            min="1" 
+                            max="12" 
+                            className="stepper-input" 
+                            value={sigFigs} 
+                            onChange={e => setSigFigs(parseInt(e.target.value, 10) || 1)} 
+                          />
+                        ) : stopCondition === 'iterations' ? (
+                          <div style={{ display: 'flex', width: '100%', alignItems: 'center' }}>
+                            <button 
+                              type="button" 
+                              className="stepper-btn" 
+                              onClick={() => {
+                                const step = method === 'simpson_38' ? 3 : method === 'simpson_18' ? 2 : 1;
+                                setIntegN(prev => Math.max(step, Number(prev) - step));
+                              }}
+                            >
+                              <ChevronDown size={18} />
+                            </button>
+                            <input 
+                              type="number" 
+                              min="1" 
+                              className="stepper-input" 
+                              value={integN} 
+                              onChange={e => setIntegN(parseInt(e.target.value, 10) || 1)} 
+                            />
+                            <button 
+                              type="button" 
+                              className="stepper-btn" 
+                              onClick={() => {
+                                const step = method === 'simpson_38' ? 3 : method === 'simpson_18' ? 2 : 1;
+                                setIntegN(prev => Number(prev) + step);
+                              }}
+                            >
+                              <ChevronUp size={18} />
+                            </button>
+                          </div>
+                        ) : (
+                          <input 
+                            type="number" 
+                            step="any" 
+                            className="stepper-input" 
+                            value={tolerance} 
+                            onChange={e => setTolerance(parseFloat(e.target.value) || 0.0001)} 
+                          />
+                        )}
+                      </div>
+                      {stopCondition === 'sig_figs' && (
+                        <div className="sig-figs-info">
+                          Criterio de Scarborough: Es = 0.5 × 10^(2 - {sigFigs})% = {scarboroughTol.toFixed(6)}%
+                        </div>
+                      )}
                     </div>
                   </div>
                 </>
